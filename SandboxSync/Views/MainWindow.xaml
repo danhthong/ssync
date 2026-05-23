@@ -70,9 +70,9 @@
         <Border Grid.Row="0" Grid.Column="1" Style="{StaticResource PanelCard}">
             <DockPanel>
                 <TextBlock DockPanel.Dock="Top" Text="Target Windows" Style="{StaticResource SectionTitle}" />
-                <TextBlock DockPanel.Dock="Top" Text="Select sandbox instances to mirror clicks into." Opacity="0.7" Margin="0,-6,0,10" />
+                <TextBlock DockPanel.Dock="Top" Text="Select sandbox instances to mirror clicks into. The main window is excluded automatically." Opacity="0.7" Margin="0,-6,0,10" TextWrapping="Wrap" />
 
-                <ListBox ItemsSource="{Binding Windows}"
+                <ListBox ItemsSource="{Binding Targets}"
                          BorderThickness="0"
                          Background="Transparent"
                          ScrollViewer.HorizontalScrollBarVisibility="Disabled">

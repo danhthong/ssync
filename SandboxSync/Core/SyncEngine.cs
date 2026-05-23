@@ -216,9 +216,17 @@ public sealed class SyncEngine
             Thread.Sleep(settings.ClickDelayMs);
         }
 
+        if (settings.CoalesceClicks && IsClickDown(e.Message))
+        {
+            // Skip the DOWN; we will send DOWN+UP together on the UP event.
+            return;
+        }
+
         _feedbackGuard.ArmSuppression();
 
-        if (IsClickMessage(e.Message))
+        var useCoalesce = settings.CoalesceClicks && IsClickUp(e.Message);
+
+        if (IsClickMessage(e.Message) || e.Message == WindowMessage.WM_LBUTTONDBLCLK)
         {
             _logger.Info($"Click {e.Message} @ ({e.ScreenPoint.X},{e.ScreenPoint.Y}) → {targets.Count} target(s)");
         }
@@ -237,29 +245,47 @@ public sealed class SyncEngine
                 continue;
             }
 
-            var ok = _inputReplicator.ReplicateMouse(
-                target,
-                e.Message,
-                mapped,
-                settings.ReplicationMode,
-                e.MouseData);
+            bool ok;
+            if (useCoalesce)
+            {
+                ok = _inputReplicator.ReplicateClickPair(target, e.Message, mapped);
+            }
+            else
+            {
+                ok = _inputReplicator.ReplicateMouse(
+                    target,
+                    e.Message,
+                    mapped,
+                    settings.ReplicationMode,
+                    e.MouseData);
+            }
 
             if (ok)
             {
                 successCount++;
             }
 
-            if (settings.ShowClickOverlay && IsClickMessage(e.Message))
+            if (settings.ShowClickOverlay && (IsClickMessage(e.Message) || useCoalesce))
             {
                 _overlay.ShowRipple(mapped.TargetScreenPoint);
             }
         }
 
-        if (IsClickMessage(e.Message) && successCount != targets.Count)
+        if ((IsClickMessage(e.Message) || useCoalesce) && successCount != targets.Count)
         {
             _logger.Warning($"Click replicated {successCount}/{targets.Count} targets.");
         }
     }
+
+    private static bool IsClickDown(WindowMessage msg) =>
+        msg is WindowMessage.WM_LBUTTONDOWN
+            or WindowMessage.WM_RBUTTONDOWN
+            or WindowMessage.WM_MBUTTONDOWN;
+
+    private static bool IsClickUp(WindowMessage msg) =>
+        msg is WindowMessage.WM_LBUTTONUP
+            or WindowMessage.WM_RBUTTONUP
+            or WindowMessage.WM_MBUTTONUP;
 
     private static bool IsClickInMasterArea(IntPtr master, POINT screenPt, bool broadcast, List<IntPtr> targets)
     {

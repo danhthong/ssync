@@ -19,6 +19,50 @@ public sealed class InputReplicator
     public void Configure(bool focusTargetForSendInput) =>
         _focusTargetForSendInput = focusTargetForSendInput;
 
+    /// <summary>
+    /// Single SendInput call that focuses target, fires DOWN+UP, restores master.
+    /// Used by SyncEngine when CoalesceClicks is on.
+    /// </summary>
+    public bool ReplicateClickPair(
+        IntPtr targetHwnd,
+        WindowMessage upMessage,
+        MappedPoint mapped)
+    {
+        if (!Win32Interop.IsWindowAlive(targetHwnd))
+        {
+            return false;
+        }
+
+        var downFlags = upMessage switch
+        {
+            WindowMessage.WM_LBUTTONUP => MouseEventFlags.MOUSEEVENTF_LEFTDOWN,
+            WindowMessage.WM_RBUTTONUP => MouseEventFlags.MOUSEEVENTF_RIGHTDOWN,
+            WindowMessage.WM_MBUTTONUP => MouseEventFlags.MOUSEEVENTF_MIDDLEDOWN,
+            _ => (MouseEventFlags)0
+        };
+
+        var upFlags = upMessage switch
+        {
+            WindowMessage.WM_LBUTTONUP => MouseEventFlags.MOUSEEVENTF_LEFTUP,
+            WindowMessage.WM_RBUTTONUP => MouseEventFlags.MOUSEEVENTF_RIGHTUP,
+            WindowMessage.WM_MBUTTONUP => MouseEventFlags.MOUSEEVENTF_MIDDLEUP,
+            _ => (MouseEventFlags)0
+        };
+
+        if (downFlags == 0)
+        {
+            return false;
+        }
+
+        var inputs = new[]
+        {
+            CreateMouseInput(downFlags),
+            CreateMouseInput(upFlags)
+        };
+
+        return SendInputFocusedAt(targetHwnd, mapped.TargetScreenPoint, inputs);
+    }
+
     public bool ReplicateMouse(
         IntPtr targetHwnd,
         WindowMessage message,
@@ -91,6 +135,17 @@ public sealed class InputReplicator
 
     private bool TrySendInput(IntPtr targetHwnd, WindowMessage message, MappedPoint mapped, uint mouseData)
     {
+        var inputs = BuildMouseInputs(message, mouseData);
+        if (inputs.Length == 0)
+        {
+            return true;
+        }
+
+        return SendInputFocusedAt(targetHwnd, mapped.TargetScreenPoint, inputs);
+    }
+
+    private bool SendInputFocusedAt(IntPtr targetHwnd, POINT targetScreenPoint, INPUT[] inputs)
+    {
         NativeMethods.GetCursorPos(out var savedPos);
         var savedForeground = NativeMethods.GetForegroundWindow();
         var attachedFrom = 0u;
@@ -108,18 +163,11 @@ public sealed class InputReplicator
                     attached = NativeMethods.AttachThreadInput(attachedFrom, attachedTo, true);
                 }
 
-                NativeMethods.ShowWindow(targetHwnd, NativeMethods.SW_RESTORE);
                 NativeMethods.BringWindowToTop(targetHwnd);
                 NativeMethods.SetForegroundWindow(targetHwnd);
             }
 
-            NativeMethods.SetCursorPos(mapped.TargetScreenPoint.X, mapped.TargetScreenPoint.Y);
-
-            var inputs = BuildMouseInputs(message, mouseData);
-            if (inputs.Length == 0)
-            {
-                return true;
-            }
+            NativeMethods.SetCursorPos(targetScreenPoint.X, targetScreenPoint.Y);
 
             var sent = NativeMethods.SendInput((uint)inputs.Length, inputs, Marshal.SizeOf<INPUT>());
             return sent == inputs.Length;

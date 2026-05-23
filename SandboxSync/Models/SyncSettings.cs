@@ -40,6 +40,13 @@ public sealed class SyncSettings
     /// </summary>
     public bool FocusTargetForSendInput { get; set; } = true;
 
+    /// <summary>
+    /// When true, the engine waits for the BUTTONUP event and sends a single DOWN+UP pair per target.
+    /// Greatly reduces flicker when SendInput is the active replication mode.
+    /// Disables drag-sync (hold-and-drag mouse).
+    /// </summary>
+    public bool CoalesceClicks { get; set; } = true;
+
     public SyncSettings Clone() => new()
     {
         ReplicationMode = ReplicationMode,
@@ -53,6 +60,7 @@ public sealed class SyncSettings
         SuppressionWindowMs = SuppressionWindowMs,
         SandboxFilter = SandboxFilter,
         TitleFilter = TitleFilter,
-        FocusTargetForSendInput = FocusTargetForSendInput
+        FocusTargetForSendInput = FocusTargetForSendInput,
+        CoalesceClicks = CoalesceClicks
     };
 }

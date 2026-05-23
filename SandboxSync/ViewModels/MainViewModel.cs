@@ -42,6 +42,8 @@ public partial class MainViewModel : ObservableObject
 
     public ObservableCollection<WindowItemViewModel> Windows { get; } = [];
 
+    public ObservableCollection<WindowItemViewModel> Targets { get; } = [];
+
     public ObservableCollection<LogEntry> Logs => _logger.Entries;
 
     public MainViewModel(
@@ -123,10 +125,20 @@ public partial class MainViewModel : ObservableObject
         }
 
         MasterWindow = Windows.FirstOrDefault(w => w.IsMaster);
+        RebuildTargets();
         StatusText = string.IsNullOrWhiteSpace(TitleFilter)
             ? $"Found {Windows.Count} windows"
             : $"Found {Windows.Count} windows matching \"{TitleFilter}\"";
         _logger.Info($"Refreshed window list ({Windows.Count}) filter='{TitleFilter}'.");
+    }
+
+    private void RebuildTargets()
+    {
+        Targets.Clear();
+        foreach (var w in Windows.Where(w => !w.IsMaster))
+        {
+            Targets.Add(w);
+        }
     }
 
     [RelayCommand]
@@ -140,9 +152,14 @@ public partial class MainViewModel : ObservableObject
         foreach (var w in Windows)
         {
             w.IsMaster = ReferenceEquals(w, item);
+            if (w.IsMaster)
+            {
+                w.IsSelected = false;
+            }
         }
 
         MasterWindow = item;
+        RebuildTargets();
         _logger.Info($"Master set: {item.Title} ({item.HandleText})");
     }
 
@@ -305,13 +322,18 @@ public partial class MainViewModel : ObservableObject
                 if (existing is not null)
                 {
                     existing.RefreshFrom(info);
-                    existing.IsSelected = true;
+                    if (!existing.IsMaster)
+                    {
+                        existing.IsSelected = true;
+                    }
                 }
                 else
                 {
                     Windows.Add(new WindowItemViewModel(info) { IsSelected = true });
                 }
             }
+
+            RebuildTargets();
 
             if (_syncEngine.State == SyncState.Running)
             {
