@@ -1,12 +1,14 @@
+using System.Runtime.InteropServices;
 using SandboxSync.Interop;
 using SandboxSync.Services;
 
 namespace SandboxSync.Core;
 
 /// <summary>
-/// Simple click replicator. Routes the click to the deepest child HWND at the
-/// mapped point in the target window and posts WM_*BUTTONDOWN/UP to that child.
-/// No cursor movement, no foreground / focus changes.
+/// Replicates a click into each target via SendInput. For apps that read
+/// Raw Input / DirectInput (most games) PostMessage is silently ignored —
+/// SendInput is the only user-mode path that actually works, and it requires
+/// the target window to be the foreground window when the input is delivered.
 /// </summary>
 public sealed class InputReplicator
 {
@@ -29,53 +31,68 @@ public sealed class InputReplicator
             return false;
         }
 
-        var (downMsg, upMsg, wParam) = upMessage switch
+        var (downFlag, upFlag) = upMessage switch
         {
-            WindowMessage.WM_LBUTTONUP => (WindowMessage.WM_LBUTTONDOWN, WindowMessage.WM_LBUTTONUP, (nint)1),
-            WindowMessage.WM_RBUTTONUP => (WindowMessage.WM_RBUTTONDOWN, WindowMessage.WM_RBUTTONUP, (nint)2),
-            WindowMessage.WM_MBUTTONUP => (WindowMessage.WM_MBUTTONDOWN, WindowMessage.WM_MBUTTONUP, (nint)0x10),
-            _ => (WindowMessage.WM_NULL, WindowMessage.WM_NULL, (nint)0)
+            WindowMessage.WM_LBUTTONUP => (MouseEventFlags.MOUSEEVENTF_LEFTDOWN, MouseEventFlags.MOUSEEVENTF_LEFTUP),
+            WindowMessage.WM_RBUTTONUP => (MouseEventFlags.MOUSEEVENTF_RIGHTDOWN, MouseEventFlags.MOUSEEVENTF_RIGHTUP),
+            WindowMessage.WM_MBUTTONUP => (MouseEventFlags.MOUSEEVENTF_MIDDLEDOWN, MouseEventFlags.MOUSEEVENTF_MIDDLEUP),
+            _ => ((MouseEventFlags)0, (MouseEventFlags)0)
         };
 
-        if (downMsg == WindowMessage.WM_NULL)
+        if (downFlag == 0)
         {
             return false;
         }
 
-        // Walk down to the deepest child HWND at the mapped point.
-        // Most apps host their real input target (button, render canvas, web view)
-        // as a child of the top-level window. Posting to the top-level alone
-        // often does nothing — we need to deliver to that child.
-        var childHwnd = ResolveDeepestChild(targetHwnd, mapped.TargetScreenPoint);
-        var childClientPoint = Win32Interop.ScreenToClientDpi(childHwnd, mapped.TargetScreenPoint);
-        var lParam = Win32Interop.PackMouseLParam(childClientPoint.X, childClientPoint.Y);
+        if ((NativeMethods.GetWindowLong(targetHwnd, NativeMethods.GWL_STYLE) & NativeMethods.WS_MINIMIZE) != 0)
+        {
+            NativeMethods.ShowWindow(targetHwnd, NativeMethods.SW_RESTORE);
+        }
 
-        // Move-then-click sequence so apps update hover/hit-test state first.
-        NativeMethods.PostMessage(childHwnd, (uint)WindowMessage.WM_MOUSEMOVE, 0, lParam);
-        NativeMethods.PostMessage(childHwnd, (uint)downMsg, wParam, lParam);
-        NativeMethods.PostMessage(childHwnd, (uint)upMsg, 0, lParam);
+        // Alt-key trick to satisfy Win10/11 SetForegroundWindow restrictions.
+        NativeMethods.keybd_event(NativeMethods.VK_MENU, 0, 0, (nuint)FeedbackGuard.SyncTag);
+        NativeMethods.SetForegroundWindow(targetHwnd);
+        NativeMethods.keybd_event(NativeMethods.VK_MENU, 0, NativeMethods.KEYEVENTF_KEYUP, (nuint)FeedbackGuard.SyncTag);
+
+        NativeMethods.SetCursorPos(mapped.TargetScreenPoint.X, mapped.TargetScreenPoint.Y);
+
+        var size = Marshal.SizeOf<INPUT>();
+        var down = new[] { CreateMouseInput(downFlag) };
+        var up = new[] { CreateMouseInput(upFlag) };
+
+        NativeMethods.SendInput(1, down, size);
+        Thread.Sleep(15);
+        NativeMethods.SendInput(1, up, size);
         return true;
     }
 
-    private static IntPtr ResolveDeepestChild(IntPtr parent, POINT screenPoint)
+    /// <summary>
+    /// Called once after a click batch to restore the master as foreground
+    /// and put the cursor back. Doing this once per batch (rather than per
+    /// target) keeps flicker minimal even with many targets.
+    /// </summary>
+    public void RestoreForeground(IntPtr masterHwnd, POINT cursorPos)
     {
-        var current = parent;
-        for (var depth = 0; depth < 16; depth++)
+        if (masterHwnd != IntPtr.Zero && NativeMethods.GetForegroundWindow() != masterHwnd)
         {
-            var clientPoint = Win32Interop.ScreenToClientDpi(current, screenPoint);
-            var child = NativeMethods.ChildWindowFromPointEx(
-                current,
-                clientPoint,
-                NativeMethods.CWP_SKIPINVISIBLE | NativeMethods.CWP_SKIPDISABLED | NativeMethods.CWP_SKIPTRANSPARENT);
-
-            if (child == IntPtr.Zero || child == current)
-            {
-                return current;
-            }
-
-            current = child;
+            NativeMethods.keybd_event(NativeMethods.VK_MENU, 0, 0, (nuint)FeedbackGuard.SyncTag);
+            NativeMethods.SetForegroundWindow(masterHwnd);
+            NativeMethods.keybd_event(NativeMethods.VK_MENU, 0, NativeMethods.KEYEVENTF_KEYUP, (nuint)FeedbackGuard.SyncTag);
         }
 
-        return current;
+        NativeMethods.SetCursorPos(cursorPos.X, cursorPos.Y);
     }
+
+    private static INPUT CreateMouseInput(MouseEventFlags flags) => new()
+    {
+        type = (uint)InputType.INPUT_MOUSE,
+        U = new InputUnion
+        {
+            mi = new MOUSEINPUT
+            {
+                dwFlags = (uint)flags,
+                dwExtraInfo = FeedbackGuard.SyncTag
+            }
+        }
+    };
 }

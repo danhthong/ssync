@@ -190,6 +190,7 @@ public sealed class SyncEngine
         }
 
         _feedbackGuard.ArmSuppression();
+        NativeMethods.GetCursorPos(out var savedCursor);
 
         foreach (var target in targets)
         {
@@ -210,6 +211,9 @@ public sealed class SyncEngine
                 _overlay.ShowRipple(mapped.TargetScreenPoint);
             }
         }
+
+        // Restore master focus + cursor only once at the end of the batch.
+        _inputReplicator.RestoreForeground(master, savedCursor);
     }
 
     private static bool IsClickInMasterArea(IntPtr master, POINT screenPt)
