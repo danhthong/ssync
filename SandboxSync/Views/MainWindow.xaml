@@ -37,10 +37,6 @@
                      ShowClose="True"
                      CanMaximize="True" />
 
-        <Grid.Resources>
-            <Thickness x:Key="PanelMargin">16,4,16,0</Thickness>
-        </Grid.Resources>
-
         <!-- LEFT: Main window -->
         <Border Grid.Row="1" Grid.Column="0" Style="{StaticResource PanelCard}" Margin="16,4,4,4">
             <DockPanel>
