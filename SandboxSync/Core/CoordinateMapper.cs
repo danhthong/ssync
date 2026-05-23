@@ -54,9 +54,11 @@ public sealed class CoordinateMapper
             return false;
         }
 
-        var targetClient = new POINT(
-            (int)Math.Round(nx * targetRect.Width),
-            (int)Math.Round(ny * targetRect.Height));
+        var targetClient = new POINT
+        {
+            X = (int)Math.Round(nx * targetRect.Width),
+            Y = (int)Math.Round(ny * targetRect.Height)
+        };
 
         var targetScreen = Win32Interop.ClientToScreenDpi(targetHwnd, targetClient);
 

@@ -43,8 +43,10 @@ public static class DpiHelper
         }
 
         var ratio = toScale / fromScale;
-        return new POINT(
-            (int)Math.Round(point.X * ratio),
-            (int)Math.Round(point.Y * ratio));
+        return new POINT
+        {
+            X = (int)Math.Round(point.X * ratio),
+            Y = (int)Math.Round(point.Y * ratio)
+        };
     }
 }
