@@ -294,6 +294,18 @@ public static class NativeMethods
     public static extern uint GetCurrentThreadId();
 
     [DllImport("user32.dll")]
+    public static extern void keybd_event(byte bVk, byte bScan, uint dwFlags, nuint dwExtraInfo);
+
+    public const byte VK_MENU = 0x12;
+    public const uint KEYEVENTF_KEYUP = 0x0002;
+
+    [DllImport("user32.dll")]
+    public static extern uint GetWindowLong(IntPtr hWnd, int nIndex);
+
+    public const int GWL_STYLE = -16;
+    public const int WS_MINIMIZE = 0x20000000;
+
+    [DllImport("user32.dll")]
     public static extern uint GetDpiForWindow(IntPtr hwnd);
 
     [DllImport("user32.dll")]

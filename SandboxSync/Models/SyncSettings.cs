@@ -28,7 +28,7 @@ public sealed class SyncSettings
     /// </summary>
     public int MoveFpsLimit { get; set; } = 120;
 
-    public int SuppressionWindowMs { get; set; } = 50;
+    public int SuppressionWindowMs { get; set; } = 250;
 
     public string SandboxFilter { get; set; } = string.Empty;
 

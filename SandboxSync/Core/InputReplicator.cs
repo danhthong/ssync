@@ -146,46 +146,58 @@ public sealed class InputReplicator
 
     private bool SendInputFocusedAt(IntPtr targetHwnd, POINT targetScreenPoint, INPUT[] inputs)
     {
-        NativeMethods.GetCursorPos(out var savedPos);
-        var savedForeground = NativeMethods.GetForegroundWindow();
-        var attachedFrom = 0u;
-        var attachedTo = 0u;
-        var attached = false;
+        var size = Marshal.SizeOf<INPUT>();
 
-        try
+        if (_focusTargetForSendInput && NativeMethods.GetForegroundWindow() != targetHwnd)
         {
-            if (_focusTargetForSendInput && targetHwnd != savedForeground)
+            if ((NativeMethods.GetWindowLong(targetHwnd, NativeMethods.GWL_STYLE) & NativeMethods.WS_MINIMIZE) != 0)
             {
-                attachedFrom = NativeMethods.GetCurrentThreadId();
-                attachedTo = NativeMethods.GetWindowThreadProcessId(targetHwnd, out _);
-                if (attachedFrom != attachedTo)
-                {
-                    attached = NativeMethods.AttachThreadInput(attachedFrom, attachedTo, true);
-                }
-
-                NativeMethods.BringWindowToTop(targetHwnd);
-                NativeMethods.SetForegroundWindow(targetHwnd);
+                NativeMethods.ShowWindow(targetHwnd, NativeMethods.SW_RESTORE);
             }
 
-            NativeMethods.SetCursorPos(targetScreenPoint.X, targetScreenPoint.Y);
+            // Alt-key trick to bypass SetForegroundWindow restrictions in Win10/11.
+            NativeMethods.keybd_event(NativeMethods.VK_MENU, 0, 0, (nuint)FeedbackGuard.SyncTag);
+            NativeMethods.SetForegroundWindow(targetHwnd);
+            NativeMethods.keybd_event(NativeMethods.VK_MENU, 0, NativeMethods.KEYEVENTF_KEYUP, (nuint)FeedbackGuard.SyncTag);
 
-            var sent = NativeMethods.SendInput((uint)inputs.Length, inputs, Marshal.SizeOf<INPUT>());
-            return sent == inputs.Length;
+            // Wait briefly for the foreground change to actually take effect.
+            for (var i = 0; i < 6 && NativeMethods.GetForegroundWindow() != targetHwnd; i++)
+            {
+                Thread.Sleep(3);
+            }
         }
-        finally
+
+        NativeMethods.SetCursorPos(targetScreenPoint.X, targetScreenPoint.Y);
+        Thread.Sleep(2);
+
+        foreach (var input in inputs)
         {
-            if (_focusTargetForSendInput && savedForeground != IntPtr.Zero && savedForeground != targetHwnd)
+            var single = new[] { input };
+            if (NativeMethods.SendInput(1, single, size) != 1)
             {
-                NativeMethods.SetForegroundWindow(savedForeground);
+                return false;
             }
-
-            if (attached)
-            {
-                NativeMethods.AttachThreadInput(attachedFrom, attachedTo, false);
-            }
-
-            NativeMethods.SetCursorPos(savedPos.X, savedPos.Y);
+            Thread.Sleep(12);
         }
+
+        return true;
+    }
+
+    /// <summary>
+    /// Called by SyncEngine after a click batch to restore the master window
+    /// as foreground and the cursor to its original position. Doing this once
+    /// per batch (rather than per target) eliminates per-target flicker.
+    /// </summary>
+    public void RestoreForeground(IntPtr masterHwnd, POINT cursorPos)
+    {
+        if (masterHwnd != IntPtr.Zero && NativeMethods.GetForegroundWindow() != masterHwnd)
+        {
+            NativeMethods.keybd_event(NativeMethods.VK_MENU, 0, 0, (nuint)FeedbackGuard.SyncTag);
+            NativeMethods.SetForegroundWindow(masterHwnd);
+            NativeMethods.keybd_event(NativeMethods.VK_MENU, 0, NativeMethods.KEYEVENTF_KEYUP, (nuint)FeedbackGuard.SyncTag);
+        }
+
+        NativeMethods.SetCursorPos(cursorPos.X, cursorPos.Y);
     }
 
     private static INPUT[] BuildMouseInputs(WindowMessage message, uint mouseData)

@@ -222,9 +222,12 @@ public sealed class SyncEngine
             return;
         }
 
+        // Arm a feedback-suppression window large enough to cover a full
+        // multi-target click batch (focus + click + restore for each target).
         _feedbackGuard.ArmSuppression();
 
         var useCoalesce = settings.CoalesceClicks && IsClickUp(e.Message);
+        NativeMethods.GetCursorPos(out var savedCursor);
 
         if (IsClickMessage(e.Message) || e.Message == WindowMessage.WM_LBUTTONDBLCLK)
         {
@@ -269,6 +272,12 @@ public sealed class SyncEngine
             {
                 _overlay.ShowRipple(mapped.TargetScreenPoint);
             }
+        }
+
+        // Restore master focus and cursor only once at the end of the click batch.
+        if (IsClickMessage(e.Message) || useCoalesce || e.Message == WindowMessage.WM_LBUTTONDBLCLK)
+        {
+            _inputReplicator.RestoreForeground(master, savedCursor);
         }
 
         if ((IsClickMessage(e.Message) || useCoalesce) && successCount != targets.Count)
