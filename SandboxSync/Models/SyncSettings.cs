@@ -24,6 +24,11 @@ public sealed class SyncSettings
     public int ClickDelayMs { get; set; }
 
     /// <summary>
+    /// Delay between clicking each target window inside one click batch (milliseconds).
+    /// </summary>
+    public int InterTargetDelayMs { get; set; } = 500;
+
+    /// <summary>
     /// Maximum mouse-move events per second when SyncMouseMove is enabled. 0 = unlimited.
     /// </summary>
     public int MoveFpsLimit { get; set; } = 120;
@@ -61,6 +66,7 @@ public sealed class SyncSettings
         SandboxFilter = SandboxFilter,
         TitleFilter = TitleFilter,
         FocusTargetForSendInput = FocusTargetForSendInput,
-        CoalesceClicks = CoalesceClicks
+        CoalesceClicks = CoalesceClicks,
+        InterTargetDelayMs = InterTargetDelayMs
     };
 }

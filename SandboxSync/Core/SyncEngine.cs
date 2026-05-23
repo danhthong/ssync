@@ -22,6 +22,7 @@ public sealed class SyncEngine
     private readonly ClickOverlayService _overlay;
 
     private readonly object _gate = new();
+    private readonly SemaphoreSlim _batchGate = new(1, 1);
     private IntPtr _masterHwnd;
     private List<IntPtr> _targetHwnds = [];
     private List<ExcludeRegion> _excludeRegions = [];
@@ -170,6 +171,7 @@ public sealed class SyncEngine
         List<IntPtr> targets;
         List<ExcludeRegion> excludes;
         bool showOverlay;
+        int interTargetDelayMs;
 
         lock (_gate)
         {
@@ -177,6 +179,7 @@ public sealed class SyncEngine
             targets = _targetHwnds.ToList();
             excludes = _excludeRegions;
             showOverlay = _settings.ShowClickOverlay;
+            interTargetDelayMs = Math.Max(0, _settings.InterTargetDelayMs);
         }
 
         if (!Win32Interop.IsWindowAlive(master))
@@ -189,31 +192,71 @@ public sealed class SyncEngine
             return;
         }
 
-        _feedbackGuard.ArmSuppression();
         NativeMethods.GetCursorPos(out var savedCursor);
+        var screenPoint = e.ScreenPoint;
+        var message = e.Message;
 
-        foreach (var target in targets)
+        // Run the click batch off the hook consumer thread so the app stays
+        // responsive and the OS keeps delivering hook events while we click.
+        _ = Task.Run(() => RunClickBatchAsync(
+            master,
+            targets,
+            excludes,
+            message,
+            screenPoint,
+            savedCursor,
+            showOverlay,
+            interTargetDelayMs));
+    }
+
+    private async Task RunClickBatchAsync(
+        IntPtr master,
+        List<IntPtr> targets,
+        List<ExcludeRegion> excludes,
+        WindowMessage message,
+        POINT screenPoint,
+        POINT savedCursor,
+        bool showOverlay,
+        int interTargetDelayMs)
+    {
+        await _batchGate.WaitAsync().ConfigureAwait(false);
+        try
         {
-            if (!Win32Interop.IsWindowAlive(target))
+            for (var i = 0; i < targets.Count; i++)
             {
-                continue;
+                var target = targets[i];
+
+                if (!Win32Interop.IsWindowAlive(target))
+                {
+                    continue;
+                }
+
+                if (!_coordinateMapper.TryMap(master, screenPoint, target, excludes, out var mapped))
+                {
+                    continue;
+                }
+
+                _feedbackGuard.ArmSuppression();
+                _inputReplicator.ReplicateClickPair(target, message, mapped);
+
+                if (showOverlay)
+                {
+                    _overlay.ShowRipple(mapped.TargetScreenPoint);
+                }
+
+                if (i < targets.Count - 1 && interTargetDelayMs > 0)
+                {
+                    await Task.Delay(interTargetDelayMs).ConfigureAwait(false);
+                }
             }
 
-            if (!_coordinateMapper.TryMap(master, e.ScreenPoint, target, excludes, out var mapped))
-            {
-                continue;
-            }
-
-            _inputReplicator.ReplicateClickPair(target, e.Message, mapped);
-
-            if (showOverlay)
-            {
-                _overlay.ShowRipple(mapped.TargetScreenPoint);
-            }
+            _feedbackGuard.ArmSuppression();
+            _inputReplicator.RestoreForeground(master, savedCursor);
         }
-
-        // Restore master focus + cursor only once at the end of the batch.
-        _inputReplicator.RestoreForeground(master, savedCursor);
+        finally
+        {
+            _batchGate.Release();
+        }
     }
 
     private static bool IsClickInMasterArea(IntPtr master, POINT screenPt)
