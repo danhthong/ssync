@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using SandboxSync.Interop;
 using SandboxSync.Models;
 using SandboxSync.Services;
@@ -28,8 +27,6 @@ public sealed class SyncEngine
     private List<ExcludeRegion> _excludeRegions = [];
     private SyncSettings _settings = new();
     private SyncState _state = SyncState.Stopped;
-    private long _lastMoveTicks;
-    private long _moveIntervalTicks;
 
     public event EventHandler<SyncState>? StateChanged;
     public event EventHandler<string>? StatusChanged;
@@ -54,7 +51,6 @@ public sealed class SyncEngine
         _overlay = overlay;
 
         _mouseHook.MouseEvent += OnMouseEvent;
-        _keyboardHook.KeyboardEvent += OnKeyboardEvent;
     }
 
     public void Configure(
@@ -73,15 +69,7 @@ public sealed class SyncEngine
             _settings = settings.Clone();
             _excludeRegions = excludeRegions?.ToList() ?? [];
             _feedbackGuard.Configure(_settings.SuppressionWindowMs);
-            _inputReplicator.ResetTargetModes();
-            _inputReplicator.Configure(_settings.FocusTargetForSendInput);
-
-            _moveIntervalTicks = _settings.MoveFpsLimit > 0
-                ? (long)(Stopwatch.Frequency / (double)_settings.MoveFpsLimit)
-                : 0;
         }
-
-        _logger.Info($"Configured master=0x{masterHwnd.ToInt64():X}, targets={_targetHwnds.Count}, mode={settings.ReplicationMode}");
     }
 
     public void UpdateTargets(IEnumerable<IntPtr> targetHwnds)
@@ -111,13 +99,7 @@ public sealed class SyncEngine
         }
 
         _mouseHook.Start();
-        if (_settings.SyncKeyboard)
-        {
-            _keyboardHook.Start();
-        }
-
         SetState(SyncState.Running);
-        _logger.Info("Synchronization started.");
         StatusChanged?.Invoke(this, "Running");
     }
 
@@ -126,7 +108,6 @@ public sealed class SyncEngine
         _mouseHook.Stop();
         _keyboardHook.Stop();
         SetState(SyncState.Stopped);
-        _logger.Info("Synchronization stopped.");
         StatusChanged?.Invoke(this, "Stopped");
     }
 
@@ -138,7 +119,6 @@ public sealed class SyncEngine
         }
 
         SetState(SyncState.Paused);
-        _logger.Info("Synchronization paused.");
         StatusChanged?.Invoke(this, "Paused");
     }
 
@@ -150,7 +130,6 @@ public sealed class SyncEngine
         }
 
         SetState(SyncState.Running);
-        _logger.Info("Synchronization resumed.");
         StatusChanged?.Invoke(this, "Running");
     }
 
@@ -178,17 +157,26 @@ public sealed class SyncEngine
             return;
         }
 
+        // Only act on the UP edge of a click; that triggers a full DOWN+UP
+        // to each target. Everything else (DOWN, MOVE, DBLCLK, wheel) is ignored.
+        if (e.Message is not WindowMessage.WM_LBUTTONUP
+            and not WindowMessage.WM_RBUTTONUP
+            and not WindowMessage.WM_MBUTTONUP)
+        {
+            return;
+        }
+
         IntPtr master;
         List<IntPtr> targets;
-        SyncSettings settings;
         List<ExcludeRegion> excludes;
+        bool showOverlay;
 
         lock (_gate)
         {
             master = _masterHwnd;
             targets = _targetHwnds.ToList();
-            settings = _settings;
             excludes = _excludeRegions;
+            showOverlay = _settings.ShowClickOverlay;
         }
 
         if (!Win32Interop.IsWindowAlive(master))
@@ -196,50 +184,17 @@ public sealed class SyncEngine
             return;
         }
 
-        if (e.Message == WindowMessage.WM_MOUSEMOVE && !settings.SyncMouseMove)
+        if (!IsClickInMasterArea(master, e.ScreenPoint))
         {
             return;
         }
 
-        if (e.Message == WindowMessage.WM_MOUSEMOVE && !CanProcessMove())
-        {
-            return;
-        }
-
-        if (!IsClickInMasterArea(master, e.ScreenPoint, settings.BroadcastMode, targets))
-        {
-            return;
-        }
-
-        if (settings.ClickDelayMs > 0 && IsClickMessage(e.Message))
-        {
-            Thread.Sleep(settings.ClickDelayMs);
-        }
-
-        if (settings.CoalesceClicks && IsClickDown(e.Message))
-        {
-            // Skip the DOWN; we will send DOWN+UP together on the UP event.
-            return;
-        }
-
-        // Arm a feedback-suppression window large enough to cover a full
-        // multi-target click batch (focus + click + restore for each target).
         _feedbackGuard.ArmSuppression();
 
-        var useCoalesce = settings.CoalesceClicks && IsClickUp(e.Message);
-        NativeMethods.GetCursorPos(out var savedCursor);
-
-        if (IsClickMessage(e.Message) || e.Message == WindowMessage.WM_LBUTTONDBLCLK)
-        {
-            _logger.Info($"Click {e.Message} @ ({e.ScreenPoint.X},{e.ScreenPoint.Y}) → {targets.Count} target(s)");
-        }
-
-        var successCount = 0;
         foreach (var target in targets)
         {
             if (!Win32Interop.IsWindowAlive(target))
             {
-                _logger.Warning($"Target 0x{target.ToInt64():X} no longer alive.");
                 continue;
             }
 
@@ -248,63 +203,19 @@ public sealed class SyncEngine
                 continue;
             }
 
-            bool ok;
-            if (useCoalesce)
-            {
-                ok = _inputReplicator.ReplicateClickPair(target, e.Message, mapped);
-            }
-            else
-            {
-                ok = _inputReplicator.ReplicateMouse(
-                    target,
-                    e.Message,
-                    mapped,
-                    settings.ReplicationMode,
-                    e.MouseData);
-            }
+            _inputReplicator.ReplicateClickPair(target, e.Message, mapped);
 
-            if (ok)
-            {
-                successCount++;
-            }
-
-            if (settings.ShowClickOverlay && (IsClickMessage(e.Message) || useCoalesce))
+            if (showOverlay)
             {
                 _overlay.ShowRipple(mapped.TargetScreenPoint);
             }
         }
-
-        // Restore master focus and cursor only once at the end of the click batch.
-        if (IsClickMessage(e.Message) || useCoalesce || e.Message == WindowMessage.WM_LBUTTONDBLCLK)
-        {
-            _inputReplicator.RestoreForeground(master, savedCursor);
-        }
-
-        if ((IsClickMessage(e.Message) || useCoalesce) && successCount != targets.Count)
-        {
-            _logger.Warning($"Click replicated {successCount}/{targets.Count} targets.");
-        }
     }
 
-    private static bool IsClickDown(WindowMessage msg) =>
-        msg is WindowMessage.WM_LBUTTONDOWN
-            or WindowMessage.WM_RBUTTONDOWN
-            or WindowMessage.WM_MBUTTONDOWN;
-
-    private static bool IsClickUp(WindowMessage msg) =>
-        msg is WindowMessage.WM_LBUTTONUP
-            or WindowMessage.WM_RBUTTONUP
-            or WindowMessage.WM_MBUTTONUP;
-
-    private static bool IsClickInMasterArea(IntPtr master, POINT screenPt, bool broadcast, List<IntPtr> targets)
+    private static bool IsClickInMasterArea(IntPtr master, POINT screenPt)
     {
         var rootUnderCursor = Win32Interop.GetRootWindowFromPoint(screenPt);
         if (rootUnderCursor == master)
-        {
-            return true;
-        }
-
-        if (broadcast && targets.Contains(rootUnderCursor))
         {
             return true;
         }
@@ -320,77 +231,6 @@ public sealed class SyncEngine
 
         return false;
     }
-
-    private void OnKeyboardEvent(object? sender, KeyboardHookEvent e)
-    {
-        if (_state != SyncState.Running)
-        {
-            return;
-        }
-
-        if (_feedbackGuard.ShouldIgnore(e.ExtraInfo))
-        {
-            return;
-        }
-
-        SyncSettings settings;
-        IntPtr master;
-        List<IntPtr> targets;
-
-        lock (_gate)
-        {
-            settings = _settings;
-            master = _masterHwnd;
-            targets = _targetHwnds.ToList();
-        }
-
-        if (!settings.SyncKeyboard)
-        {
-            return;
-        }
-
-        NativeMethods.GetCursorPos(out var cursor);
-        if (Win32Interop.GetRootWindowFromPoint(cursor) != master)
-        {
-            return;
-        }
-
-        _feedbackGuard.ArmSuppression();
-
-        foreach (var target in targets)
-        {
-            _inputReplicator.ReplicateKey(target, e.VirtualKey, e.IsKeyUp, settings.ReplicationMode);
-        }
-    }
-
-    private bool CanProcessMove()
-    {
-        if (_moveIntervalTicks <= 0)
-        {
-            return true;
-        }
-
-        var now = Stopwatch.GetTimestamp();
-        var last = Interlocked.Read(ref _lastMoveTicks);
-        if (now - last < _moveIntervalTicks)
-        {
-            return false;
-        }
-
-        Interlocked.Exchange(ref _lastMoveTicks, now);
-        return true;
-    }
-
-    private static bool IsClickMessage(WindowMessage msg) =>
-        msg is WindowMessage.WM_LBUTTONDOWN
-            or WindowMessage.WM_LBUTTONUP
-            or WindowMessage.WM_LBUTTONDBLCLK
-            or WindowMessage.WM_RBUTTONDOWN
-            or WindowMessage.WM_RBUTTONUP
-            or WindowMessage.WM_RBUTTONDBLCLK
-            or WindowMessage.WM_MBUTTONDOWN
-            or WindowMessage.WM_MBUTTONUP
-            or WindowMessage.WM_MBUTTONDBLCLK;
 
     private void SetState(SyncState state)
     {

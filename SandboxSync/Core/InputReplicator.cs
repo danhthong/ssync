@@ -1,325 +1,49 @@
-using System.Collections.Concurrent;
-using System.Runtime.InteropServices;
 using SandboxSync.Interop;
-using SandboxSync.Models;
 using SandboxSync.Services;
 
 namespace SandboxSync.Core;
 
+/// <summary>
+/// Simple click replicator. Posts a complete click (DOWN+UP) to each target
+/// HWND via PostMessage. No cursor movement, no foreground / focus changes.
+/// </summary>
 public sealed class InputReplicator
 {
     private readonly LoggingService _logger;
-    private readonly ConcurrentDictionary<IntPtr, InputReplicationMode> _perTargetMode = new();
-    private bool _focusTargetForSendInput = true;
 
     public InputReplicator(LoggingService logger) => _logger = logger;
 
-    public void ResetTargetModes() => _perTargetMode.Clear();
+    public void ResetTargetModes()
+    {
+    }
 
-    public void Configure(bool focusTargetForSendInput) =>
-        _focusTargetForSendInput = focusTargetForSendInput;
+    public void Configure(bool _)
+    {
+    }
 
-    /// <summary>
-    /// Single SendInput call that focuses target, fires DOWN+UP, restores master.
-    /// Used by SyncEngine when CoalesceClicks is on.
-    /// </summary>
-    public bool ReplicateClickPair(
-        IntPtr targetHwnd,
-        WindowMessage upMessage,
-        MappedPoint mapped)
+    public bool ReplicateClickPair(IntPtr targetHwnd, WindowMessage upMessage, MappedPoint mapped)
     {
         if (!Win32Interop.IsWindowAlive(targetHwnd))
         {
             return false;
         }
 
-        var downFlags = upMessage switch
+        var (downMsg, upMsg, wParam) = upMessage switch
         {
-            WindowMessage.WM_LBUTTONUP => MouseEventFlags.MOUSEEVENTF_LEFTDOWN,
-            WindowMessage.WM_RBUTTONUP => MouseEventFlags.MOUSEEVENTF_RIGHTDOWN,
-            WindowMessage.WM_MBUTTONUP => MouseEventFlags.MOUSEEVENTF_MIDDLEDOWN,
-            _ => (MouseEventFlags)0
+            WindowMessage.WM_LBUTTONUP => (WindowMessage.WM_LBUTTONDOWN, WindowMessage.WM_LBUTTONUP, (nint)1),
+            WindowMessage.WM_RBUTTONUP => (WindowMessage.WM_RBUTTONDOWN, WindowMessage.WM_RBUTTONUP, (nint)2),
+            WindowMessage.WM_MBUTTONUP => (WindowMessage.WM_MBUTTONDOWN, WindowMessage.WM_MBUTTONUP, (nint)0x10),
+            _ => (WindowMessage.WM_NULL, WindowMessage.WM_NULL, (nint)0)
         };
 
-        var upFlags = upMessage switch
-        {
-            WindowMessage.WM_LBUTTONUP => MouseEventFlags.MOUSEEVENTF_LEFTUP,
-            WindowMessage.WM_RBUTTONUP => MouseEventFlags.MOUSEEVENTF_RIGHTUP,
-            WindowMessage.WM_MBUTTONUP => MouseEventFlags.MOUSEEVENTF_MIDDLEUP,
-            _ => (MouseEventFlags)0
-        };
-
-        if (downFlags == 0)
+        if (downMsg == WindowMessage.WM_NULL)
         {
             return false;
         }
 
-        var inputs = new[]
-        {
-            CreateMouseInput(downFlags),
-            CreateMouseInput(upFlags)
-        };
-
-        return SendInputFocusedAt(targetHwnd, mapped.TargetScreenPoint, inputs);
-    }
-
-    public bool ReplicateMouse(
-        IntPtr targetHwnd,
-        WindowMessage message,
-        MappedPoint mapped,
-        InputReplicationMode preferredMode,
-        uint mouseData = 0)
-    {
-        if (!Win32Interop.IsWindowAlive(targetHwnd))
-        {
-            return false;
-        }
-
-        var mode = _perTargetMode.GetOrAdd(targetHwnd, preferredMode);
-
-        bool success = mode switch
-        {
-            InputReplicationMode.PostMessage => TryPostMessage(targetHwnd, message, mapped, mouseData),
-            InputReplicationMode.SendInput => TrySendInput(targetHwnd, message, mapped, mouseData),
-            _ => TryPostMessage(targetHwnd, message, mapped, mouseData)
-        };
-
-        if (!success)
-        {
-            if (TrySendInput(targetHwnd, message, mapped, mouseData))
-            {
-                if (_perTargetMode[targetHwnd] != InputReplicationMode.SendInput)
-                {
-                    _perTargetMode[targetHwnd] = InputReplicationMode.SendInput;
-                    _logger.Warning($"Target 0x{targetHwnd.ToInt64():X} downgraded to SendInput.");
-                }
-                return true;
-            }
-
-            _logger.Error($"Replicate {message} → 0x{targetHwnd.ToInt64():X} failed (both strategies).");
-            return false;
-        }
-
-        return success;
-    }
-
-    public bool ReplicateKey(IntPtr targetHwnd, uint virtualKey, bool keyUp, InputReplicationMode mode)
-    {
-        if (!Win32Interop.IsWindowAlive(targetHwnd))
-        {
-            return false;
-        }
-
-        if (mode == InputReplicationMode.SendInput)
-        {
-            return SendKeyViaInput(targetHwnd, virtualKey, keyUp);
-        }
-
-        var msg = keyUp ? WindowMessage.WM_KEYUP : WindowMessage.WM_KEYDOWN;
-        var lParam = BuildKeyLParam(virtualKey, keyUp);
-        var posted = NativeMethods.PostMessage(targetHwnd, (uint)msg, (nint)virtualKey, lParam);
-        if (posted)
-        {
-            return true;
-        }
-
-        return SendKeyViaInput(targetHwnd, virtualKey, keyUp);
-    }
-
-    private bool TryPostMessage(IntPtr targetHwnd, WindowMessage message, MappedPoint mapped, uint mouseData)
-    {
-        var wParam = BuildMouseWParam(message, mouseData);
         var lParam = Win32Interop.PackMouseLParam(mapped.TargetClientPoint.X, mapped.TargetClientPoint.Y);
-        return NativeMethods.PostMessage(targetHwnd, (uint)message, wParam, lParam);
-    }
-
-    private bool TrySendInput(IntPtr targetHwnd, WindowMessage message, MappedPoint mapped, uint mouseData)
-    {
-        var inputs = BuildMouseInputs(message, mouseData);
-        if (inputs.Length == 0)
-        {
-            return true;
-        }
-
-        return SendInputFocusedAt(targetHwnd, mapped.TargetScreenPoint, inputs);
-    }
-
-    private bool SendInputFocusedAt(IntPtr targetHwnd, POINT targetScreenPoint, INPUT[] inputs)
-    {
-        var size = Marshal.SizeOf<INPUT>();
-
-        if (_focusTargetForSendInput && NativeMethods.GetForegroundWindow() != targetHwnd)
-        {
-            if ((NativeMethods.GetWindowLong(targetHwnd, NativeMethods.GWL_STYLE) & NativeMethods.WS_MINIMIZE) != 0)
-            {
-                NativeMethods.ShowWindow(targetHwnd, NativeMethods.SW_RESTORE);
-            }
-
-            // Alt-key trick to bypass SetForegroundWindow restrictions in Win10/11.
-            NativeMethods.keybd_event(NativeMethods.VK_MENU, 0, 0, (nuint)FeedbackGuard.SyncTag);
-            NativeMethods.SetForegroundWindow(targetHwnd);
-            NativeMethods.keybd_event(NativeMethods.VK_MENU, 0, NativeMethods.KEYEVENTF_KEYUP, (nuint)FeedbackGuard.SyncTag);
-
-            // Wait briefly for the foreground change to actually take effect.
-            for (var i = 0; i < 6 && NativeMethods.GetForegroundWindow() != targetHwnd; i++)
-            {
-                Thread.Sleep(3);
-            }
-        }
-
-        NativeMethods.SetCursorPos(targetScreenPoint.X, targetScreenPoint.Y);
-        Thread.Sleep(2);
-
-        foreach (var input in inputs)
-        {
-            var single = new[] { input };
-            if (NativeMethods.SendInput(1, single, size) != 1)
-            {
-                return false;
-            }
-            Thread.Sleep(12);
-        }
-
+        NativeMethods.PostMessage(targetHwnd, (uint)downMsg, wParam, lParam);
+        NativeMethods.PostMessage(targetHwnd, (uint)upMsg, 0, lParam);
         return true;
-    }
-
-    /// <summary>
-    /// Called by SyncEngine after a click batch to restore the master window
-    /// as foreground and the cursor to its original position. Doing this once
-    /// per batch (rather than per target) eliminates per-target flicker.
-    /// </summary>
-    public void RestoreForeground(IntPtr masterHwnd, POINT cursorPos)
-    {
-        if (masterHwnd != IntPtr.Zero && NativeMethods.GetForegroundWindow() != masterHwnd)
-        {
-            NativeMethods.keybd_event(NativeMethods.VK_MENU, 0, 0, (nuint)FeedbackGuard.SyncTag);
-            NativeMethods.SetForegroundWindow(masterHwnd);
-            NativeMethods.keybd_event(NativeMethods.VK_MENU, 0, NativeMethods.KEYEVENTF_KEYUP, (nuint)FeedbackGuard.SyncTag);
-        }
-
-        NativeMethods.SetCursorPos(cursorPos.X, cursorPos.Y);
-    }
-
-    private static INPUT[] BuildMouseInputs(WindowMessage message, uint mouseData)
-    {
-        return message switch
-        {
-            WindowMessage.WM_LBUTTONDOWN => [CreateMouseInput(MouseEventFlags.MOUSEEVENTF_LEFTDOWN)],
-            WindowMessage.WM_LBUTTONUP => [CreateMouseInput(MouseEventFlags.MOUSEEVENTF_LEFTUP)],
-            WindowMessage.WM_LBUTTONDBLCLK =>
-            [
-                CreateMouseInput(MouseEventFlags.MOUSEEVENTF_LEFTDOWN),
-                CreateMouseInput(MouseEventFlags.MOUSEEVENTF_LEFTUP),
-                CreateMouseInput(MouseEventFlags.MOUSEEVENTF_LEFTDOWN),
-                CreateMouseInput(MouseEventFlags.MOUSEEVENTF_LEFTUP)
-            ],
-            WindowMessage.WM_RBUTTONDOWN => [CreateMouseInput(MouseEventFlags.MOUSEEVENTF_RIGHTDOWN)],
-            WindowMessage.WM_RBUTTONUP => [CreateMouseInput(MouseEventFlags.MOUSEEVENTF_RIGHTUP)],
-            WindowMessage.WM_RBUTTONDBLCLK =>
-            [
-                CreateMouseInput(MouseEventFlags.MOUSEEVENTF_RIGHTDOWN),
-                CreateMouseInput(MouseEventFlags.MOUSEEVENTF_RIGHTUP),
-                CreateMouseInput(MouseEventFlags.MOUSEEVENTF_RIGHTDOWN),
-                CreateMouseInput(MouseEventFlags.MOUSEEVENTF_RIGHTUP)
-            ],
-            WindowMessage.WM_MBUTTONDOWN => [CreateMouseInput(MouseEventFlags.MOUSEEVENTF_MIDDLEDOWN)],
-            WindowMessage.WM_MBUTTONUP => [CreateMouseInput(MouseEventFlags.MOUSEEVENTF_MIDDLEUP)],
-            WindowMessage.WM_MBUTTONDBLCLK =>
-            [
-                CreateMouseInput(MouseEventFlags.MOUSEEVENTF_MIDDLEDOWN),
-                CreateMouseInput(MouseEventFlags.MOUSEEVENTF_MIDDLEUP),
-                CreateMouseInput(MouseEventFlags.MOUSEEVENTF_MIDDLEDOWN),
-                CreateMouseInput(MouseEventFlags.MOUSEEVENTF_MIDDLEUP)
-            ],
-            WindowMessage.WM_MOUSEMOVE => [CreateMouseInput(MouseEventFlags.MOUSEEVENTF_MOVE)],
-            WindowMessage.WM_MOUSEWHEEL => [CreateMouseInput(MouseEventFlags.MOUSEEVENTF_WHEEL, mouseData)],
-            _ => []
-        };
-    }
-
-    private static INPUT CreateMouseInput(MouseEventFlags flags, uint mouseData = 0) => new()
-    {
-        type = (uint)InputType.INPUT_MOUSE,
-        U = new InputUnion
-        {
-            mi = new MOUSEINPUT
-            {
-                dwFlags = (uint)flags,
-                mouseData = mouseData,
-                dwExtraInfo = FeedbackGuard.SyncTag
-            }
-        }
-    };
-
-    private bool SendKeyViaInput(IntPtr targetHwnd, uint virtualKey, bool keyUp)
-    {
-        var savedForeground = NativeMethods.GetForegroundWindow();
-        var attachedFrom = 0u;
-        var attachedTo = 0u;
-        var attached = false;
-
-        try
-        {
-            if (_focusTargetForSendInput && targetHwnd != savedForeground)
-            {
-                attachedFrom = NativeMethods.GetCurrentThreadId();
-                attachedTo = NativeMethods.GetWindowThreadProcessId(targetHwnd, out _);
-                if (attachedFrom != attachedTo)
-                {
-                    attached = NativeMethods.AttachThreadInput(attachedFrom, attachedTo, true);
-                }
-
-                NativeMethods.SetForegroundWindow(targetHwnd);
-            }
-
-            var inputs = new[]
-            {
-                new INPUT
-                {
-                    type = (uint)InputType.INPUT_KEYBOARD,
-                    U = new InputUnion
-                    {
-                        ki = new KEYBDINPUT
-                        {
-                            wVk = (ushort)virtualKey,
-                            dwFlags = keyUp ? (uint)KeyboardEventFlags.KEYEVENTF_KEYUP : 0,
-                            dwExtraInfo = FeedbackGuard.SyncTag
-                        }
-                    }
-                }
-            };
-
-            return NativeMethods.SendInput(1, inputs, Marshal.SizeOf<INPUT>()) == 1;
-        }
-        finally
-        {
-            if (_focusTargetForSendInput && savedForeground != IntPtr.Zero && savedForeground != targetHwnd)
-            {
-                NativeMethods.SetForegroundWindow(savedForeground);
-            }
-
-            if (attached)
-            {
-                NativeMethods.AttachThreadInput(attachedFrom, attachedTo, false);
-            }
-        }
-    }
-
-    private static nint BuildMouseWParam(WindowMessage message, uint mouseData) =>
-        message switch
-        {
-            WindowMessage.WM_LBUTTONDOWN or WindowMessage.WM_LBUTTONUP or WindowMessage.WM_LBUTTONDBLCLK => 1,
-            WindowMessage.WM_RBUTTONDOWN or WindowMessage.WM_RBUTTONUP or WindowMessage.WM_RBUTTONDBLCLK => 2,
-            WindowMessage.WM_MBUTTONDOWN or WindowMessage.WM_MBUTTONUP or WindowMessage.WM_MBUTTONDBLCLK => 0x10,
-            WindowMessage.WM_MOUSEWHEEL => (nint)((int)mouseData << 16),
-            _ => 0
-        };
-
-    private static nint BuildKeyLParam(uint vk, bool keyUp)
-    {
-        const int repeat = 1;
-        const int scan = 0;
-        var flags = keyUp ? (1 << 31) | (1 << 30) : 0;
-        return (nint)(repeat | (scan << 16) | flags);
     }
 }

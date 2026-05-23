@@ -44,8 +44,6 @@ public partial class MainViewModel : ObservableObject
 
     public ObservableCollection<WindowItemViewModel> Targets { get; } = [];
 
-    public ObservableCollection<LogEntry> Logs => _logger.Entries;
-
     public MainViewModel(
         WindowScannerService scanner,
         SandboxDetectorService sandboxDetector,
@@ -75,10 +73,6 @@ public partial class MainViewModel : ObservableObject
             Application.Current.Dispatcher.Invoke(() => StatusText = status);
 
         _hotkeys.HotkeyPressed += OnHotkeyPressed;
-        _logger.EntryAdded += (_, entry) =>
-        {
-            // Logs collection is updated by LoggingService on UI thread.
-        };
     }
 
     public async Task InitializeAsync()

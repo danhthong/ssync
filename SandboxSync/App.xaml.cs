@@ -53,7 +53,6 @@ public partial class App : Application
 
         services.AddSingleton<MainViewModel>();
         services.AddSingleton<MainWindow>();
-        services.AddTransient<SettingsFlyout>();
     }
 
     protected override async void OnExit(ExitEventArgs e)
