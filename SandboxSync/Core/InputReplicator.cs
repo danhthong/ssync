@@ -56,14 +56,16 @@ public sealed class InputReplicator
 
         NativeMethods.SetCursorPos(mapped.TargetScreenPoint.X, mapped.TargetScreenPoint.Y);
 
-        var size = Marshal.SizeOf<INPUT>();
-        var down = new[] { CreateMouseInput(downFlag) };
-        var up = new[] { CreateMouseInput(upFlag) };
+        // Send DOWN and UP atomically so the OS delivers them as one fast click,
+        // not a hold-then-release. Any gap risks the target registering a drag.
+        var inputs = new[]
+        {
+            CreateMouseInput(downFlag),
+            CreateMouseInput(upFlag)
+        };
 
-        NativeMethods.SendInput(1, down, size);
-        Thread.Sleep(15);
-        NativeMethods.SendInput(1, up, size);
-        return true;
+        var sent = NativeMethods.SendInput((uint)inputs.Length, inputs, Marshal.SizeOf<INPUT>());
+        return sent == inputs.Length;
     }
 
     /// <summary>
