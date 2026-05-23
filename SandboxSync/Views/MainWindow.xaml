@@ -19,8 +19,9 @@
         </Style>
     </ui:FluentWindow.Resources>
 
-    <Grid Margin="16">
+    <Grid>
         <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
             <RowDefinition Height="*" />
             <RowDefinition Height="Auto" />
         </Grid.RowDefinitions>
@@ -29,8 +30,19 @@
             <ColumnDefinition Width="*" />
         </Grid.ColumnDefinitions>
 
+        <ui:TitleBar Grid.Row="0" Grid.Column="0" Grid.ColumnSpan="2"
+                     Title="Sandbox Sync"
+                     ShowMaximize="True"
+                     ShowMinimize="True"
+                     ShowClose="True"
+                     CanMaximize="True" />
+
+        <Grid.Resources>
+            <Thickness x:Key="PanelMargin">16,4,16,0</Thickness>
+        </Grid.Resources>
+
         <!-- LEFT: Main window -->
-        <Border Grid.Row="0" Grid.Column="0" Style="{StaticResource PanelCard}">
+        <Border Grid.Row="1" Grid.Column="0" Style="{StaticResource PanelCard}" Margin="16,4,4,4">
             <DockPanel>
                 <TextBlock DockPanel.Dock="Top" Text="Main Window" Style="{StaticResource SectionTitle}" />
 
@@ -65,7 +77,7 @@
         </Border>
 
         <!-- RIGHT: Targets -->
-        <Border Grid.Row="0" Grid.Column="1" Style="{StaticResource PanelCard}">
+        <Border Grid.Row="1" Grid.Column="1" Style="{StaticResource PanelCard}" Margin="4,4,16,4">
             <DockPanel>
                 <TextBlock DockPanel.Dock="Top" Text="Target Windows" Style="{StaticResource SectionTitle}" />
                 <TextBlock DockPanel.Dock="Top" Text="Tick the windows that should mirror clicks from the main window. The main window is excluded automatically." Opacity="0.7" Margin="0,-6,0,10" TextWrapping="Wrap" />
@@ -101,7 +113,7 @@
         </Border>
 
         <!-- BOTTOM: Controls -->
-        <Border Grid.Row="1" Grid.Column="0" Grid.ColumnSpan="2" Style="{StaticResource PanelCard}" Margin="6,12,6,0">
+        <Border Grid.Row="2" Grid.Column="0" Grid.ColumnSpan="2" Style="{StaticResource PanelCard}" Margin="16,4,16,16">
             <Grid>
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="Auto" />

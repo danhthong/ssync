@@ -49,15 +49,16 @@ public sealed class InputReplicator
             NativeMethods.ShowWindow(targetHwnd, NativeMethods.SW_RESTORE);
         }
 
-        // Alt-key trick to satisfy Win10/11 SetForegroundWindow restrictions.
-        NativeMethods.keybd_event(NativeMethods.VK_MENU, 0, 0, (nuint)FeedbackGuard.SyncTag);
-        NativeMethods.SetForegroundWindow(targetHwnd);
-        NativeMethods.keybd_event(NativeMethods.VK_MENU, 0, NativeMethods.KEYEVENTF_KEYUP, (nuint)FeedbackGuard.SyncTag);
+        if (!ForceForeground(targetHwnd))
+        {
+            _logger.Warning($"Failed to bring 0x{targetHwnd.ToInt64():X} to foreground; click skipped.");
+            return false;
+        }
 
         NativeMethods.SetCursorPos(mapped.TargetScreenPoint.X, mapped.TargetScreenPoint.Y);
+        // Tiny breathing room for the OS to update hit-testing state after a focus change.
+        Thread.Sleep(5);
 
-        // Send DOWN and UP atomically so the OS delivers them as one fast click,
-        // not a hold-then-release. Any gap risks the target registering a drag.
         var inputs = new[]
         {
             CreateMouseInput(downFlag),
@@ -69,17 +70,79 @@ public sealed class InputReplicator
     }
 
     /// <summary>
+    /// Robustly bring a window to the foreground across UAC / integrity levels.
+    /// Combines AttachThreadInput, BringWindowToTop, SetForegroundWindow, and SetFocus,
+    /// then actively waits until GetForegroundWindow == target.
+    /// </summary>
+    private static bool ForceForeground(IntPtr targetHwnd)
+    {
+        var current = NativeMethods.GetForegroundWindow();
+        if (current == targetHwnd)
+        {
+            return true;
+        }
+
+        var currentThread = NativeMethods.GetCurrentThreadId();
+        var targetThread = NativeMethods.GetWindowThreadProcessId(targetHwnd, out _);
+        var foregroundThread = current != IntPtr.Zero
+            ? NativeMethods.GetWindowThreadProcessId(current, out _)
+            : 0u;
+
+        var attachedTarget = false;
+        var attachedForeground = false;
+
+        if (targetThread != 0 && targetThread != currentThread)
+        {
+            attachedTarget = NativeMethods.AttachThreadInput(currentThread, targetThread, true);
+        }
+        if (foregroundThread != 0 && foregroundThread != currentThread && foregroundThread != targetThread)
+        {
+            attachedForeground = NativeMethods.AttachThreadInput(currentThread, foregroundThread, true);
+        }
+
+        try
+        {
+            // Alt-trick still required for SetForegroundWindow on Win10/11.
+            NativeMethods.keybd_event(NativeMethods.VK_MENU, 0, 0, (nuint)FeedbackGuard.SyncTag);
+            NativeMethods.BringWindowToTop(targetHwnd);
+            NativeMethods.SetForegroundWindow(targetHwnd);
+            NativeMethods.keybd_event(NativeMethods.VK_MENU, 0, NativeMethods.KEYEVENTF_KEYUP, (nuint)FeedbackGuard.SyncTag);
+
+            // Wait for the foreground swap to actually complete (up to ~150 ms).
+            for (var i = 0; i < 30; i++)
+            {
+                if (NativeMethods.GetForegroundWindow() == targetHwnd)
+                {
+                    return true;
+                }
+                Thread.Sleep(5);
+            }
+
+            return NativeMethods.GetForegroundWindow() == targetHwnd;
+        }
+        finally
+        {
+            if (attachedTarget)
+            {
+                NativeMethods.AttachThreadInput(currentThread, targetThread, false);
+            }
+            if (attachedForeground)
+            {
+                NativeMethods.AttachThreadInput(currentThread, foregroundThread, false);
+            }
+        }
+    }
+
+    /// <summary>
     /// Called once after a click batch to restore the master as foreground
     /// and put the cursor back. Doing this once per batch (rather than per
     /// target) keeps flicker minimal even with many targets.
     /// </summary>
     public void RestoreForeground(IntPtr masterHwnd, POINT cursorPos)
     {
-        if (masterHwnd != IntPtr.Zero && NativeMethods.GetForegroundWindow() != masterHwnd)
+        if (masterHwnd != IntPtr.Zero)
         {
-            NativeMethods.keybd_event(NativeMethods.VK_MENU, 0, 0, (nuint)FeedbackGuard.SyncTag);
-            NativeMethods.SetForegroundWindow(masterHwnd);
-            NativeMethods.keybd_event(NativeMethods.VK_MENU, 0, NativeMethods.KEYEVENTF_KEYUP, (nuint)FeedbackGuard.SyncTag);
+            ForceForeground(masterHwnd);
         }
 
         NativeMethods.SetCursorPos(cursorPos.X, cursorPos.Y);
