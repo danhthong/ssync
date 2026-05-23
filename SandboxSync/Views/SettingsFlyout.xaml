@@ -1,0 +1,46 @@
+<ui:FluentWindow x:Class="SandboxSync.Views.SettingsFlyout"
+                 xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                 xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                 xmlns:ui="http://schemas.lepo.co/wpfui/2022/xaml"
+                 Title="Sync Settings"
+                 Width="420"
+                 Height="560"
+                 WindowStartupLocation="CenterOwner"
+                 ResizeMode="NoResize"
+                 WindowBackdropType="Mica">
+    <ScrollViewer Margin="20" VerticalScrollBarVisibility="Auto">
+        <StackPanel>
+            <TextBlock Text="Synchronization" FontSize="18" FontWeight="SemiBold" Margin="0,0,0,12" />
+
+            <TextBlock Text="Replication mode" Margin="0,0,0,4" />
+            <ComboBox x:Name="ReplicationModeCombo" SelectionChanged="ReplicationModeCombo_SelectionChanged" Margin="0,0,0,12">
+                <ComboBoxItem Content="Hybrid (PostMessage → SendInput)" />
+                <ComboBoxItem Content="PostMessage only" />
+                <ComboBoxItem Content="SendInput only" />
+            </ComboBox>
+
+            <CheckBox Content="Sync mouse movement" IsChecked="{Binding Settings.SyncMouseMove}" Margin="0,0,0,8" />
+            <CheckBox Content="Sync keyboard" IsChecked="{Binding Settings.SyncKeyboard}" Margin="0,0,0,8" />
+            <CheckBox Content="Broadcast mode (any master/target hit)" IsChecked="{Binding Settings.BroadcastMode}" Margin="0,0,0,8" />
+            <CheckBox Content="Show click overlay" IsChecked="{Binding Settings.ShowClickOverlay}" Margin="0,0,0,8" />
+            <CheckBox Content="Auto-reconnect targets" IsChecked="{Binding Settings.AutoReconnect}" Margin="0,0,0,16" />
+
+            <TextBlock Text="Click delay (ms)" Margin="0,0,0,4" />
+            <ui:NumberBox Value="{Binding Settings.ClickDelayMs, Mode=TwoWay}" Minimum="0" Maximum="500" Margin="0,0,0,12" />
+
+            <TextBlock Text="Move FPS limit (0 = unlimited)" Margin="0,0,0,4" />
+            <ui:NumberBox Value="{Binding Settings.MoveFpsLimit, Mode=TwoWay}" Minimum="0" Maximum="1000" Margin="0,0,0,12" />
+
+            <TextBlock Text="Feedback suppression (ms)" Margin="0,0,0,4" />
+            <ui:NumberBox Value="{Binding Settings.SuppressionWindowMs, Mode=TwoWay}" Minimum="0" Maximum="500" Margin="0,0,0,16" />
+
+            <TextBlock Text="Hotkeys" FontSize="16" FontWeight="SemiBold" Margin="0,0,0,8" />
+            <TextBlock Text="Start: Ctrl+Shift+S" Opacity="0.8" Margin="0,0,0,4" />
+            <TextBlock Text="Stop: Ctrl+Shift+X" Opacity="0.8" Margin="0,0,0,4" />
+            <TextBlock Text="Pause: Ctrl+Shift+P" Opacity="0.8" Margin="0,0,0,16" />
+
+            <ui:Button Content="Register Hotkeys" Command="{Binding RegisterHotkeysCommand}" HorizontalAlignment="Stretch" Margin="0,0,0,8" />
+            <ui:Button Content="Close" Click="Close_Click" HorizontalAlignment="Stretch" />
+        </StackPanel>
+    </ScrollViewer>
+</ui:FluentWindow>
