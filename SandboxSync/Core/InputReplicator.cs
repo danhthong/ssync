@@ -1,14 +1,18 @@
 using System.Runtime.InteropServices;
 using SandboxSync.Interop;
+using SandboxSync.Models;
 using SandboxSync.Services;
 
 namespace SandboxSync.Core;
 
 /// <summary>
-/// Replicates a click into each target via SendInput. For apps that read
-/// Raw Input / DirectInput (most games) PostMessage is silently ignored —
-/// SendInput is the only user-mode path that actually works, and it requires
-/// the target window to be the foreground window when the input is delivered.
+/// Replicates a click into a single target. Two strategies:
+///   PostMessage — posts WM_*BUTTONDOWN/UP to the deepest child HWND at the
+///   mapped point. Real-time, no focus switching. Works for web/browser games
+///   and normal Win32 apps. Games that read Raw Input ignore these messages.
+///
+///   SendInput — brings target to foreground, moves cursor, fires SendInput.
+///   Required for Raw Input / DirectInput games. Causes per-target focus flicker.
 /// </summary>
 public sealed class InputReplicator
 {
@@ -24,13 +28,51 @@ public sealed class InputReplicator
     {
     }
 
-    public bool ReplicateClickPair(IntPtr targetHwnd, WindowMessage upMessage, MappedPoint mapped)
+    public bool ReplicateClickPair(
+        IntPtr targetHwnd,
+        WindowMessage upMessage,
+        MappedPoint mapped,
+        InputReplicationMode mode)
     {
         if (!Win32Interop.IsWindowAlive(targetHwnd))
         {
             return false;
         }
 
+        return mode switch
+        {
+            InputReplicationMode.PostMessage => PostClick(targetHwnd, upMessage, mapped),
+            _ => SendInputClick(targetHwnd, upMessage, mapped)
+        };
+    }
+
+    private static bool PostClick(IntPtr targetHwnd, WindowMessage upMessage, MappedPoint mapped)
+    {
+        var (downMsg, upMsg, wParam) = upMessage switch
+        {
+            WindowMessage.WM_LBUTTONUP => (WindowMessage.WM_LBUTTONDOWN, WindowMessage.WM_LBUTTONUP, (nint)1),
+            WindowMessage.WM_RBUTTONUP => (WindowMessage.WM_RBUTTONDOWN, WindowMessage.WM_RBUTTONUP, (nint)2),
+            WindowMessage.WM_MBUTTONUP => (WindowMessage.WM_MBUTTONDOWN, WindowMessage.WM_MBUTTONUP, (nint)0x10),
+            _ => (WindowMessage.WM_NULL, WindowMessage.WM_NULL, (nint)0)
+        };
+
+        if (downMsg == WindowMessage.WM_NULL)
+        {
+            return false;
+        }
+
+        var childHwnd = ResolveDeepestChild(targetHwnd, mapped.TargetScreenPoint);
+        var childClientPoint = Win32Interop.ScreenToClientDpi(childHwnd, mapped.TargetScreenPoint);
+        var lParam = Win32Interop.PackMouseLParam(childClientPoint.X, childClientPoint.Y);
+
+        NativeMethods.PostMessage(childHwnd, (uint)WindowMessage.WM_MOUSEMOVE, 0, lParam);
+        NativeMethods.PostMessage(childHwnd, (uint)downMsg, wParam, lParam);
+        NativeMethods.PostMessage(childHwnd, (uint)upMsg, 0, lParam);
+        return true;
+    }
+
+    private bool SendInputClick(IntPtr targetHwnd, WindowMessage upMessage, MappedPoint mapped)
+    {
         var (downFlag, upFlag) = upMessage switch
         {
             WindowMessage.WM_LBUTTONUP => (MouseEventFlags.MOUSEEVENTF_LEFTDOWN, MouseEventFlags.MOUSEEVENTF_LEFTUP),
@@ -56,7 +98,6 @@ public sealed class InputReplicator
         }
 
         NativeMethods.SetCursorPos(mapped.TargetScreenPoint.X, mapped.TargetScreenPoint.Y);
-        // Tiny breathing room for the OS to update hit-testing state after a focus change.
         Thread.Sleep(5);
 
         var inputs = new[]
@@ -69,11 +110,43 @@ public sealed class InputReplicator
         return sent == inputs.Length;
     }
 
-    /// <summary>
-    /// Robustly bring a window to the foreground across UAC / integrity levels.
-    /// Combines AttachThreadInput, BringWindowToTop, SetForegroundWindow, and SetFocus,
-    /// then actively waits until GetForegroundWindow == target.
-    /// </summary>
+    public void RestoreForeground(IntPtr masterHwnd, POINT cursorPos, InputReplicationMode mode)
+    {
+        if (mode == InputReplicationMode.PostMessage)
+        {
+            return; // nothing to restore — we never moved focus / cursor.
+        }
+
+        if (masterHwnd != IntPtr.Zero)
+        {
+            ForceForeground(masterHwnd);
+        }
+
+        NativeMethods.SetCursorPos(cursorPos.X, cursorPos.Y);
+    }
+
+    private static IntPtr ResolveDeepestChild(IntPtr parent, POINT screenPoint)
+    {
+        var current = parent;
+        for (var depth = 0; depth < 16; depth++)
+        {
+            var clientPoint = Win32Interop.ScreenToClientDpi(current, screenPoint);
+            var child = NativeMethods.ChildWindowFromPointEx(
+                current,
+                clientPoint,
+                NativeMethods.CWP_SKIPINVISIBLE | NativeMethods.CWP_SKIPDISABLED | NativeMethods.CWP_SKIPTRANSPARENT);
+
+            if (child == IntPtr.Zero || child == current)
+            {
+                return current;
+            }
+
+            current = child;
+        }
+
+        return current;
+    }
+
     private static bool ForceForeground(IntPtr targetHwnd)
     {
         var current = NativeMethods.GetForegroundWindow();
@@ -102,13 +175,11 @@ public sealed class InputReplicator
 
         try
         {
-            // Alt-trick still required for SetForegroundWindow on Win10/11.
             NativeMethods.keybd_event(NativeMethods.VK_MENU, 0, 0, (nuint)FeedbackGuard.SyncTag);
             NativeMethods.BringWindowToTop(targetHwnd);
             NativeMethods.SetForegroundWindow(targetHwnd);
             NativeMethods.keybd_event(NativeMethods.VK_MENU, 0, NativeMethods.KEYEVENTF_KEYUP, (nuint)FeedbackGuard.SyncTag);
 
-            // Wait for the foreground swap to actually complete (up to ~150 ms).
             for (var i = 0; i < 30; i++)
             {
                 if (NativeMethods.GetForegroundWindow() == targetHwnd)
@@ -131,21 +202,6 @@ public sealed class InputReplicator
                 NativeMethods.AttachThreadInput(currentThread, foregroundThread, false);
             }
         }
-    }
-
-    /// <summary>
-    /// Called once after a click batch to restore the master as foreground
-    /// and put the cursor back. Doing this once per batch (rather than per
-    /// target) keeps flicker minimal even with many targets.
-    /// </summary>
-    public void RestoreForeground(IntPtr masterHwnd, POINT cursorPos)
-    {
-        if (masterHwnd != IntPtr.Zero)
-        {
-            ForceForeground(masterHwnd);
-        }
-
-        NativeMethods.SetCursorPos(cursorPos.X, cursorPos.Y);
     }
 
     private static INPUT CreateMouseInput(MouseEventFlags flags) => new()

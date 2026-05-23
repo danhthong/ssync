@@ -92,6 +92,14 @@ public sealed class SyncEngine
         }
     }
 
+    public void UpdateReplicationMode(InputReplicationMode mode)
+    {
+        lock (_gate)
+        {
+            _settings.ReplicationMode = mode;
+        }
+    }
+
     public void Start()
     {
         if (_state == SyncState.Running)
@@ -180,6 +188,7 @@ public sealed class SyncEngine
         List<ExcludeRegion> excludes;
         bool showOverlay;
         int interTargetDelayMs;
+        InputReplicationMode mode;
 
         lock (_gate)
         {
@@ -188,6 +197,7 @@ public sealed class SyncEngine
             excludes = _excludeRegions;
             showOverlay = _settings.ShowClickOverlay;
             interTargetDelayMs = Math.Max(0, _settings.InterTargetDelayMs);
+            mode = _settings.ReplicationMode;
         }
 
         if (!Win32Interop.IsWindowAlive(master))
@@ -214,7 +224,8 @@ public sealed class SyncEngine
             screenPoint,
             savedCursor,
             showOverlay,
-            interTargetDelayMs));
+            interTargetDelayMs,
+            mode));
     }
 
     private async Task RunClickBatchAsync(
@@ -225,11 +236,37 @@ public sealed class SyncEngine
         POINT screenPoint,
         POINT savedCursor,
         bool showOverlay,
-        int interTargetDelayMs)
+        int interTargetDelayMs,
+        InputReplicationMode mode)
     {
         await _batchGate.WaitAsync().ConfigureAwait(false);
         try
         {
+            // PostMessage mode: parallel, no focus / cursor changes, no inter-target delay needed.
+            if (mode == InputReplicationMode.PostMessage)
+            {
+                Parallel.ForEach(targets, target =>
+                {
+                    if (!Win32Interop.IsWindowAlive(target))
+                    {
+                        return;
+                    }
+                    if (!_coordinateMapper.TryMap(master, screenPoint, target, excludes, out var mapped))
+                    {
+                        return;
+                    }
+
+                    _inputReplicator.ReplicateClickPair(target, message, mapped, mode);
+
+                    if (showOverlay)
+                    {
+                        _overlay.ShowRipple(mapped.TargetScreenPoint);
+                    }
+                });
+                return;
+            }
+
+            // SendInput mode: sequential — focus / click / restore master per target with inter-delay.
             for (var i = 0; i < targets.Count; i++)
             {
                 var target = targets[i];
@@ -245,18 +282,15 @@ public sealed class SyncEngine
                 }
 
                 _feedbackGuard.ArmSuppression();
-                _inputReplicator.ReplicateClickPair(target, message, mapped);
+                _inputReplicator.ReplicateClickPair(target, message, mapped, mode);
 
                 if (showOverlay)
                 {
                     _overlay.ShowRipple(mapped.TargetScreenPoint);
                 }
 
-                // After each target's click: put cursor back on master and
-                // restore master as foreground, so the user always sees the
-                // real mouse over the main window during the delay window.
                 _feedbackGuard.ArmSuppression();
-                _inputReplicator.RestoreForeground(master, savedCursor);
+                _inputReplicator.RestoreForeground(master, savedCursor, mode);
 
                 if (i < targets.Count - 1 && interTargetDelayMs > 0)
                 {

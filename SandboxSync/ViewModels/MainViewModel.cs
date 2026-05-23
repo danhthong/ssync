@@ -43,6 +43,9 @@ public partial class MainViewModel : ObservableObject
     [ObservableProperty]
     private int _interTargetDelayMs = 500;
 
+    [ObservableProperty]
+    private bool _useFastMode = true;
+
     public ObservableCollection<WindowItemViewModel> Windows { get; } = [];
 
     public ObservableCollection<WindowItemViewModel> Targets { get; } = [];
@@ -88,6 +91,7 @@ public partial class MainViewModel : ObservableObject
             TitleFilter = Settings.TitleFilter;
         }
         InterTargetDelayMs = Settings.InterTargetDelayMs;
+        UseFastMode = Settings.ReplicationMode == InputReplicationMode.PostMessage;
         RefreshWindowsCommand.Execute(null);
         RegisterHotkeys();
         _logger.Info("Sandbox Sync initialized.");
@@ -96,8 +100,15 @@ public partial class MainViewModel : ObservableObject
     partial void OnInterTargetDelayMsChanged(int value)
     {
         Settings.InterTargetDelayMs = value;
-        // Push live to the engine so it takes effect mid-session without restarting sync.
         _syncEngine.UpdateInterTargetDelay(value);
+    }
+
+    partial void OnUseFastModeChanged(bool value)
+    {
+        Settings.ReplicationMode = value
+            ? InputReplicationMode.PostMessage
+            : InputReplicationMode.SendInput;
+        _syncEngine.UpdateReplicationMode(Settings.ReplicationMode);
     }
 
     [RelayCommand]

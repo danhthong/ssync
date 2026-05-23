@@ -2,8 +2,20 @@ namespace SandboxSync.Models;
 
 public enum InputReplicationMode
 {
+    /// <summary>
+    /// Posts WM_*BUTTONDOWN/UP to the deepest child HWND at the mapped point.
+    /// Real-time, no focus switching, no cursor movement. Works for browser
+    /// games, Electron, web-views, normal Win32 apps. Most games ignore these.
+    /// </summary>
     PostMessage,
+
+    /// <summary>
+    /// Brings each target to the foreground, moves the cursor, fires SendInput,
+    /// then restores master. Required for games that read Raw Input / DirectInput.
+    /// Causes brief focus flicker per target.
+    /// </summary>
     SendInput,
+
     Hybrid
 }
 

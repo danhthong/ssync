@@ -120,7 +120,14 @@
                 <StackPanel Grid.Column="0" Orientation="Horizontal">
                     <ui:Button Content="Start Sync" Appearance="Primary" Command="{Binding StartSyncCommand}" Margin="0,0,8,0" />
                     <ui:Button Content="Stop" Command="{Binding StopSyncCommand}" Margin="0,0,8,0" />
-                    <ui:Button Content="Pause / Resume" Command="{Binding TogglePauseCommand}" Margin="0,0,12,0" />
+                    <ui:Button Content="Pause / Resume" Command="{Binding TogglePauseCommand}" Margin="0,0,16,0" />
+
+                    <StackPanel Orientation="Vertical" VerticalAlignment="Center" Margin="0,0,12,0">
+                        <TextBlock Text="Sync mode" Opacity="0.7" FontSize="11" Margin="0,0,0,2" />
+                        <ui:ToggleSwitch IsChecked="{Binding UseFastMode, Mode=TwoWay}"
+                                         OffContent="Game (SendInput)"
+                                         OnContent="Fast (PostMessage)" />
+                    </StackPanel>
 
                     <StackPanel Orientation="Vertical" VerticalAlignment="Center">
                         <TextBlock Text="Target delay (ms)" Opacity="0.7" FontSize="11" Margin="0,0,0,2" />
