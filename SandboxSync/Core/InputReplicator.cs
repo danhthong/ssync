@@ -4,8 +4,9 @@ using SandboxSync.Services;
 namespace SandboxSync.Core;
 
 /// <summary>
-/// Simple click replicator. Posts a complete click (DOWN+UP) to each target
-/// HWND via PostMessage. No cursor movement, no foreground / focus changes.
+/// Simple click replicator. Routes the click to the deepest child HWND at the
+/// mapped point in the target window and posts WM_*BUTTONDOWN/UP to that child.
+/// No cursor movement, no foreground / focus changes.
 /// </summary>
 public sealed class InputReplicator
 {
@@ -41,9 +42,40 @@ public sealed class InputReplicator
             return false;
         }
 
-        var lParam = Win32Interop.PackMouseLParam(mapped.TargetClientPoint.X, mapped.TargetClientPoint.Y);
-        NativeMethods.PostMessage(targetHwnd, (uint)downMsg, wParam, lParam);
-        NativeMethods.PostMessage(targetHwnd, (uint)upMsg, 0, lParam);
+        // Walk down to the deepest child HWND at the mapped point.
+        // Most apps host their real input target (button, render canvas, web view)
+        // as a child of the top-level window. Posting to the top-level alone
+        // often does nothing — we need to deliver to that child.
+        var childHwnd = ResolveDeepestChild(targetHwnd, mapped.TargetScreenPoint);
+        var childClientPoint = Win32Interop.ScreenToClientDpi(childHwnd, mapped.TargetScreenPoint);
+        var lParam = Win32Interop.PackMouseLParam(childClientPoint.X, childClientPoint.Y);
+
+        // Move-then-click sequence so apps update hover/hit-test state first.
+        NativeMethods.PostMessage(childHwnd, (uint)WindowMessage.WM_MOUSEMOVE, 0, lParam);
+        NativeMethods.PostMessage(childHwnd, (uint)downMsg, wParam, lParam);
+        NativeMethods.PostMessage(childHwnd, (uint)upMsg, 0, lParam);
         return true;
+    }
+
+    private static IntPtr ResolveDeepestChild(IntPtr parent, POINT screenPoint)
+    {
+        var current = parent;
+        for (var depth = 0; depth < 16; depth++)
+        {
+            var clientPoint = Win32Interop.ScreenToClientDpi(current, screenPoint);
+            var child = NativeMethods.ChildWindowFromPointEx(
+                current,
+                clientPoint,
+                NativeMethods.CWP_SKIPINVISIBLE | NativeMethods.CWP_SKIPDISABLED | NativeMethods.CWP_SKIPTRANSPARENT);
+
+            if (child == IntPtr.Zero || child == current)
+            {
+                return current;
+            }
+
+            current = child;
+        }
+
+        return current;
     }
 }

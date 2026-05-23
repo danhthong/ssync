@@ -238,6 +238,17 @@ public static class NativeMethods
     public static extern IntPtr WindowFromPoint(POINT point);
 
     [DllImport("user32.dll")]
+    public static extern IntPtr ChildWindowFromPointEx(IntPtr hwndParent, POINT pt, uint flags);
+
+    [DllImport("user32.dll")]
+    public static extern IntPtr RealChildWindowFromPoint(IntPtr hwndParent, POINT pt);
+
+    public const uint CWP_ALL = 0x0000;
+    public const uint CWP_SKIPINVISIBLE = 0x0001;
+    public const uint CWP_SKIPDISABLED = 0x0002;
+    public const uint CWP_SKIPTRANSPARENT = 0x0004;
+
+    [DllImport("user32.dll")]
     public static extern IntPtr GetAncestor(IntPtr hwnd, uint gaFlags);
 
     public const uint GA_ROOT = 2;
