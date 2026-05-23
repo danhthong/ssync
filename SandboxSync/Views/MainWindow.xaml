@@ -120,7 +120,17 @@
                 <StackPanel Grid.Column="0" Orientation="Horizontal">
                     <ui:Button Content="Start Sync" Appearance="Primary" Command="{Binding StartSyncCommand}" Margin="0,0,8,0" />
                     <ui:Button Content="Stop" Command="{Binding StopSyncCommand}" Margin="0,0,8,0" />
-                    <ui:Button Content="Pause / Resume" Command="{Binding TogglePauseCommand}" />
+                    <ui:Button Content="Pause / Resume" Command="{Binding TogglePauseCommand}" Margin="0,0,12,0" />
+
+                    <StackPanel Orientation="Vertical" VerticalAlignment="Center">
+                        <TextBlock Text="Target delay (ms)" Opacity="0.7" FontSize="11" Margin="0,0,0,2" />
+                        <ui:NumberBox Value="{Binding InterTargetDelayMs, Mode=TwoWay}"
+                                      Minimum="0"
+                                      Maximum="10000"
+                                      SmallChange="50"
+                                      LargeChange="250"
+                                      Width="110" />
+                    </StackPanel>
                 </StackPanel>
 
                 <StackPanel Grid.Column="1" VerticalAlignment="Center" Margin="24,0">

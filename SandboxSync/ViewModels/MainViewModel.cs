@@ -40,6 +40,9 @@ public partial class MainViewModel : ObservableObject
     [ObservableProperty]
     private SyncSettings _settings = new();
 
+    [ObservableProperty]
+    private int _interTargetDelayMs = 500;
+
     public ObservableCollection<WindowItemViewModel> Windows { get; } = [];
 
     public ObservableCollection<WindowItemViewModel> Targets { get; } = [];
@@ -84,9 +87,17 @@ public partial class MainViewModel : ObservableObject
         {
             TitleFilter = Settings.TitleFilter;
         }
+        InterTargetDelayMs = Settings.InterTargetDelayMs;
         RefreshWindowsCommand.Execute(null);
         RegisterHotkeys();
         _logger.Info("Sandbox Sync initialized.");
+    }
+
+    partial void OnInterTargetDelayMsChanged(int value)
+    {
+        Settings.InterTargetDelayMs = value;
+        // Push live to the engine so it takes effect mid-session without restarting sync.
+        _syncEngine.UpdateInterTargetDelay(value);
     }
 
     [RelayCommand]

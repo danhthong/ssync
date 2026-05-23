@@ -84,6 +84,14 @@ public sealed class SyncEngine
         }
     }
 
+    public void UpdateInterTargetDelay(int delayMs)
+    {
+        lock (_gate)
+        {
+            _settings.InterTargetDelayMs = Math.Max(0, delayMs);
+        }
+    }
+
     public void Start()
     {
         if (_state == SyncState.Running)
@@ -244,14 +252,17 @@ public sealed class SyncEngine
                     _overlay.ShowRipple(mapped.TargetScreenPoint);
                 }
 
+                // After each target's click: put cursor back on master and
+                // restore master as foreground, so the user always sees the
+                // real mouse over the main window during the delay window.
+                _feedbackGuard.ArmSuppression();
+                _inputReplicator.RestoreForeground(master, savedCursor);
+
                 if (i < targets.Count - 1 && interTargetDelayMs > 0)
                 {
                     await Task.Delay(interTargetDelayMs).ConfigureAwait(false);
                 }
             }
-
-            _feedbackGuard.ArmSuppression();
-            _inputReplicator.RestoreForeground(master, savedCursor);
         }
         finally
         {
