@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Runtime.InteropServices;
 using SandboxSync.Interop;
 using SandboxSync.Models;
 using SandboxSync.Services;
@@ -9,10 +10,14 @@ public sealed class InputReplicator
 {
     private readonly LoggingService _logger;
     private readonly ConcurrentDictionary<IntPtr, InputReplicationMode> _perTargetMode = new();
+    private bool _focusTargetForSendInput = true;
 
     public InputReplicator(LoggingService logger) => _logger = logger;
 
     public void ResetTargetModes() => _perTargetMode.Clear();
+
+    public void Configure(bool focusTargetForSendInput) =>
+        _focusTargetForSendInput = focusTargetForSendInput;
 
     public bool ReplicateMouse(
         IntPtr targetHwnd,
@@ -28,31 +33,27 @@ public sealed class InputReplicator
 
         var mode = _perTargetMode.GetOrAdd(targetHwnd, preferredMode);
 
-        var success = mode switch
+        bool success = mode switch
         {
             InputReplicationMode.PostMessage => TryPostMessage(targetHwnd, message, mapped, mouseData),
             InputReplicationMode.SendInput => TrySendInput(targetHwnd, message, mapped, mouseData),
-            _ => TryPostMessage(targetHwnd, message, mapped, mouseData) ||
-                 TrySendInput(targetHwnd, message, mapped, mouseData)
+            _ => TryPostMessage(targetHwnd, message, mapped, mouseData)
         };
 
-        if (!success && mode == InputReplicationMode.Hybrid)
+        if (!success)
         {
             if (TrySendInput(targetHwnd, message, mapped, mouseData))
             {
-                _perTargetMode[targetHwnd] = InputReplicationMode.SendInput;
-                _logger.Warning($"Target {targetHwnd} downgraded to SendInput for this session.");
+                if (_perTargetMode[targetHwnd] != InputReplicationMode.SendInput)
+                {
+                    _perTargetMode[targetHwnd] = InputReplicationMode.SendInput;
+                    _logger.Warning($"Target 0x{targetHwnd.ToInt64():X} downgraded to SendInput.");
+                }
                 return true;
             }
-        }
 
-        if (!success && mode == InputReplicationMode.PostMessage)
-        {
-            if (TrySendInput(targetHwnd, message, mapped, mouseData))
-            {
-                _perTargetMode[targetHwnd] = InputReplicationMode.SendInput;
-                return true;
-            }
+            _logger.Error($"Replicate {message} → 0x{targetHwnd.ToInt64():X} failed (both strategies).");
+            return false;
         }
 
         return success;
@@ -67,7 +68,7 @@ public sealed class InputReplicator
 
         if (mode == InputReplicationMode.SendInput)
         {
-            return SendKeyViaInput(virtualKey, keyUp);
+            return SendKeyViaInput(targetHwnd, virtualKey, keyUp);
         }
 
         var msg = keyUp ? WindowMessage.WM_KEYUP : WindowMessage.WM_KEYDOWN;
@@ -78,28 +79,40 @@ public sealed class InputReplicator
             return true;
         }
 
-        return SendKeyViaInput(virtualKey, keyUp);
+        return SendKeyViaInput(targetHwnd, virtualKey, keyUp);
     }
 
     private bool TryPostMessage(IntPtr targetHwnd, WindowMessage message, MappedPoint mapped, uint mouseData)
     {
-        var clientMsg = message;
-        if (message == WindowMessage.WM_MOUSEWHEEL || message == WindowMessage.WM_XBUTTONDOWN || message == WindowMessage.WM_XBUTTONUP)
-        {
-            clientMsg = message;
-        }
-
         var wParam = BuildMouseWParam(message, mouseData);
         var lParam = Win32Interop.PackMouseLParam(mapped.TargetClientPoint.X, mapped.TargetClientPoint.Y);
-        return NativeMethods.PostMessage(targetHwnd, (uint)clientMsg, wParam, lParam);
+        return NativeMethods.PostMessage(targetHwnd, (uint)message, wParam, lParam);
     }
 
     private bool TrySendInput(IntPtr targetHwnd, WindowMessage message, MappedPoint mapped, uint mouseData)
     {
         NativeMethods.GetCursorPos(out var savedPos);
+        var savedForeground = NativeMethods.GetForegroundWindow();
+        var attachedFrom = 0u;
+        var attachedTo = 0u;
+        var attached = false;
 
         try
         {
+            if (_focusTargetForSendInput && targetHwnd != savedForeground)
+            {
+                attachedFrom = NativeMethods.GetCurrentThreadId();
+                attachedTo = NativeMethods.GetWindowThreadProcessId(targetHwnd, out _);
+                if (attachedFrom != attachedTo)
+                {
+                    attached = NativeMethods.AttachThreadInput(attachedFrom, attachedTo, true);
+                }
+
+                NativeMethods.ShowWindow(targetHwnd, NativeMethods.SW_RESTORE);
+                NativeMethods.BringWindowToTop(targetHwnd);
+                NativeMethods.SetForegroundWindow(targetHwnd);
+            }
+
             NativeMethods.SetCursorPos(mapped.TargetScreenPoint.X, mapped.TargetScreenPoint.Y);
 
             var inputs = BuildMouseInputs(message, mouseData);
@@ -108,11 +121,21 @@ public sealed class InputReplicator
                 return true;
             }
 
-            var sent = NativeMethods.SendInput((uint)inputs.Length, inputs, System.Runtime.InteropServices.Marshal.SizeOf<INPUT>());
+            var sent = NativeMethods.SendInput((uint)inputs.Length, inputs, Marshal.SizeOf<INPUT>());
             return sent == inputs.Length;
         }
         finally
         {
+            if (_focusTargetForSendInput && savedForeground != IntPtr.Zero && savedForeground != targetHwnd)
+            {
+                NativeMethods.SetForegroundWindow(savedForeground);
+            }
+
+            if (attached)
+            {
+                NativeMethods.AttachThreadInput(attachedFrom, attachedTo, false);
+            }
+
             NativeMethods.SetCursorPos(savedPos.X, savedPos.Y);
         }
     }
@@ -168,26 +191,58 @@ public sealed class InputReplicator
         }
     };
 
-    private static bool SendKeyViaInput(uint virtualKey, bool keyUp)
+    private bool SendKeyViaInput(IntPtr targetHwnd, uint virtualKey, bool keyUp)
     {
-        var inputs = new[]
+        var savedForeground = NativeMethods.GetForegroundWindow();
+        var attachedFrom = 0u;
+        var attachedTo = 0u;
+        var attached = false;
+
+        try
         {
-            new INPUT
+            if (_focusTargetForSendInput && targetHwnd != savedForeground)
             {
-                type = (uint)InputType.INPUT_KEYBOARD,
-                U = new InputUnion
+                attachedFrom = NativeMethods.GetCurrentThreadId();
+                attachedTo = NativeMethods.GetWindowThreadProcessId(targetHwnd, out _);
+                if (attachedFrom != attachedTo)
                 {
-                    ki = new KEYBDINPUT
+                    attached = NativeMethods.AttachThreadInput(attachedFrom, attachedTo, true);
+                }
+
+                NativeMethods.SetForegroundWindow(targetHwnd);
+            }
+
+            var inputs = new[]
+            {
+                new INPUT
+                {
+                    type = (uint)InputType.INPUT_KEYBOARD,
+                    U = new InputUnion
                     {
-                        wVk = (ushort)virtualKey,
-                        dwFlags = keyUp ? (uint)KeyboardEventFlags.KEYEVENTF_KEYUP : 0,
-                        dwExtraInfo = FeedbackGuard.SyncTag
+                        ki = new KEYBDINPUT
+                        {
+                            wVk = (ushort)virtualKey,
+                            dwFlags = keyUp ? (uint)KeyboardEventFlags.KEYEVENTF_KEYUP : 0,
+                            dwExtraInfo = FeedbackGuard.SyncTag
+                        }
                     }
                 }
-            }
-        };
+            };
 
-        return NativeMethods.SendInput(1, inputs, System.Runtime.InteropServices.Marshal.SizeOf<INPUT>()) == 1;
+            return NativeMethods.SendInput(1, inputs, Marshal.SizeOf<INPUT>()) == 1;
+        }
+        finally
+        {
+            if (_focusTargetForSendInput && savedForeground != IntPtr.Zero && savedForeground != targetHwnd)
+            {
+                NativeMethods.SetForegroundWindow(savedForeground);
+            }
+
+            if (attached)
+            {
+                NativeMethods.AttachThreadInput(attachedFrom, attachedTo, false);
+            }
+        }
     }
 
     private static nint BuildMouseWParam(WindowMessage message, uint mouseData) =>
@@ -196,15 +251,15 @@ public sealed class InputReplicator
             WindowMessage.WM_LBUTTONDOWN or WindowMessage.WM_LBUTTONUP or WindowMessage.WM_LBUTTONDBLCLK => 1,
             WindowMessage.WM_RBUTTONDOWN or WindowMessage.WM_RBUTTONUP or WindowMessage.WM_RBUTTONDBLCLK => 2,
             WindowMessage.WM_MBUTTONDOWN or WindowMessage.WM_MBUTTONUP or WindowMessage.WM_MBUTTONDBLCLK => 0x10,
-            WindowMessage.WM_MOUSEWHEEL => (nint)(((int)mouseData << 16)),
+            WindowMessage.WM_MOUSEWHEEL => (nint)((int)mouseData << 16),
             _ => 0
         };
 
     private static nint BuildKeyLParam(uint vk, bool keyUp)
     {
-        var repeat = 1;
-        var scan = 0;
-        var flags = keyUp ? 1 << 31 | 1 << 30 : 0;
+        const int repeat = 1;
+        const int scan = 0;
+        var flags = keyUp ? (1 << 31) | (1 << 30) : 0;
         return (nint)(repeat | (scan << 16) | flags);
     }
 }

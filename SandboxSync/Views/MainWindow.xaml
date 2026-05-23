@@ -36,9 +36,11 @@
             <DockPanel>
                 <TextBlock DockPanel.Dock="Top" Text="Main Window" Style="{StaticResource SectionTitle}" />
                 <StackPanel DockPanel.Dock="Bottom" Margin="0,10,0,0">
-                    <ui:Button Content="Refresh Windows" Command="{Binding RefreshWindowsCommand}" HorizontalAlignment="Stretch" Margin="0,0,0,8" />
+                    <TextBlock Text="Title filter (contains)" Margin="0,0,0,4" Opacity="0.8" />
+                    <ui:TextBox Text="{Binding TitleFilter, UpdateSourceTrigger=PropertyChanged}" PlaceholderText="e.g. Dragon Hunters" Margin="0,0,0,8" />
                     <TextBlock Text="Sandbox filter" Margin="0,0,0,4" Opacity="0.8" />
                     <ui:TextBox Text="{Binding SandboxFilter, UpdateSourceTrigger=PropertyChanged}" PlaceholderText="e.g. DefaultBox" Margin="0,0,0,8" />
+                    <ui:Button Content="Refresh Windows" Command="{Binding RefreshWindowsCommand}" HorizontalAlignment="Stretch" />
                 </StackPanel>
 
                 <ListBox ItemsSource="{Binding Windows}"

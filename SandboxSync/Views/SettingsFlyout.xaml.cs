@@ -22,8 +22,8 @@ public partial class SettingsFlyout : FluentWindow
     {
         ReplicationModeCombo.SelectedIndex = _viewModel.Settings.ReplicationMode switch
         {
-            InputReplicationMode.PostMessage => 1,
-            InputReplicationMode.SendInput => 2,
+            InputReplicationMode.Hybrid => 1,
+            InputReplicationMode.PostMessage => 2,
             _ => 0
         };
     }
@@ -37,9 +37,9 @@ public partial class SettingsFlyout : FluentWindow
 
         _viewModel.Settings.ReplicationMode = ReplicationModeCombo.SelectedIndex switch
         {
-            1 => InputReplicationMode.PostMessage,
-            2 => InputReplicationMode.SendInput,
-            _ => InputReplicationMode.Hybrid
+            1 => InputReplicationMode.Hybrid,
+            2 => InputReplicationMode.PostMessage,
+            _ => InputReplicationMode.SendInput
         };
     }
 

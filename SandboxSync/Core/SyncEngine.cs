@@ -74,13 +74,14 @@ public sealed class SyncEngine
             _excludeRegions = excludeRegions?.ToList() ?? [];
             _feedbackGuard.Configure(_settings.SuppressionWindowMs);
             _inputReplicator.ResetTargetModes();
+            _inputReplicator.Configure(_settings.FocusTargetForSendInput);
 
             _moveIntervalTicks = _settings.MoveFpsLimit > 0
                 ? (long)(Stopwatch.Frequency / (double)_settings.MoveFpsLimit)
                 : 0;
         }
 
-        _logger.Info($"Configured master={masterHwnd}, targets={_targetHwnds.Count}");
+        _logger.Info($"Configured master=0x{masterHwnd.ToInt64():X}, targets={_targetHwnds.Count}, mode={settings.ReplicationMode}");
     }
 
     public void UpdateTargets(IEnumerable<IntPtr> targetHwnds)
@@ -205,16 +206,7 @@ public sealed class SyncEngine
             return;
         }
 
-        var rootUnderCursor = Win32Interop.GetRootWindowFromPoint(e.ScreenPoint);
-
-        if (!settings.BroadcastMode)
-        {
-            if (rootUnderCursor != master)
-            {
-                return;
-            }
-        }
-        else if (rootUnderCursor != master && !targets.Contains(rootUnderCursor))
+        if (!IsClickInMasterArea(master, e.ScreenPoint, settings.BroadcastMode, targets))
         {
             return;
         }
@@ -226,10 +218,17 @@ public sealed class SyncEngine
 
         _feedbackGuard.ArmSuppression();
 
+        if (IsClickMessage(e.Message))
+        {
+            _logger.Info($"Click {e.Message} @ ({e.ScreenPoint.X},{e.ScreenPoint.Y}) → {targets.Count} target(s)");
+        }
+
+        var successCount = 0;
         foreach (var target in targets)
         {
             if (!Win32Interop.IsWindowAlive(target))
             {
+                _logger.Warning($"Target 0x{target.ToInt64():X} no longer alive.");
                 continue;
             }
 
@@ -238,18 +237,53 @@ public sealed class SyncEngine
                 continue;
             }
 
-            _inputReplicator.ReplicateMouse(
+            var ok = _inputReplicator.ReplicateMouse(
                 target,
                 e.Message,
                 mapped,
                 settings.ReplicationMode,
                 e.MouseData);
 
+            if (ok)
+            {
+                successCount++;
+            }
+
             if (settings.ShowClickOverlay && IsClickMessage(e.Message))
             {
                 _overlay.ShowRipple(mapped.TargetScreenPoint);
             }
         }
+
+        if (IsClickMessage(e.Message) && successCount != targets.Count)
+        {
+            _logger.Warning($"Click replicated {successCount}/{targets.Count} targets.");
+        }
+    }
+
+    private static bool IsClickInMasterArea(IntPtr master, POINT screenPt, bool broadcast, List<IntPtr> targets)
+    {
+        var rootUnderCursor = Win32Interop.GetRootWindowFromPoint(screenPt);
+        if (rootUnderCursor == master)
+        {
+            return true;
+        }
+
+        if (broadcast && targets.Contains(rootUnderCursor))
+        {
+            return true;
+        }
+
+        if (NativeMethods.GetWindowRect(master, out var rect))
+        {
+            if (screenPt.X >= rect.Left && screenPt.X <= rect.Right &&
+                screenPt.Y >= rect.Top && screenPt.Y <= rect.Bottom)
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private void OnKeyboardEvent(object? sender, KeyboardHookEvent e)

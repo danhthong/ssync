@@ -26,6 +26,9 @@ public partial class MainViewModel : ObservableObject
     private string _sandboxFilter = string.Empty;
 
     [ObservableProperty]
+    private string _titleFilter = "Dragon Hunters";
+
+    [ObservableProperty]
     private string _profileName = "Default";
 
     [ObservableProperty]
@@ -81,6 +84,10 @@ public partial class MainViewModel : ObservableObject
         _logger.AttachDispatcher(Application.Current.Dispatcher);
         Settings = await _profiles.LoadSettingsAsync();
         SandboxFilter = Settings.SandboxFilter;
+        if (!string.IsNullOrWhiteSpace(Settings.TitleFilter))
+        {
+            TitleFilter = Settings.TitleFilter;
+        }
         RefreshWindowsCommand.Execute(null);
         RegisterHotkeys();
         _logger.Info("Sandbox Sync initialized.");
@@ -89,8 +96,12 @@ public partial class MainViewModel : ObservableObject
     [RelayCommand]
     private void RefreshWindows()
     {
+        Settings.SandboxFilter = SandboxFilter;
+        Settings.TitleFilter = TitleFilter;
+
         var list = _scanner.Refresh(
-            string.IsNullOrWhiteSpace(SandboxFilter) ? null : SandboxFilter);
+            string.IsNullOrWhiteSpace(SandboxFilter) ? null : SandboxFilter,
+            string.IsNullOrWhiteSpace(TitleFilter) ? null : TitleFilter);
 
         var selectedHandles = Windows
             .Where(w => w.IsSelected)
@@ -112,8 +123,10 @@ public partial class MainViewModel : ObservableObject
         }
 
         MasterWindow = Windows.FirstOrDefault(w => w.IsMaster);
-        StatusText = $"Found {Windows.Count} windows";
-        _logger.Info($"Refreshed window list ({Windows.Count}).");
+        StatusText = string.IsNullOrWhiteSpace(TitleFilter)
+            ? $"Found {Windows.Count} windows"
+            : $"Found {Windows.Count} windows matching \"{TitleFilter}\"";
+        _logger.Info($"Refreshed window list ({Windows.Count}) filter='{TitleFilter}'.");
     }
 
     [RelayCommand]

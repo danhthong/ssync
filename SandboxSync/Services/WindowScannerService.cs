@@ -21,13 +21,20 @@ public sealed class WindowScannerService : IDisposable
         _pollTimer.AutoReset = true;
     }
 
-    public IReadOnlyList<WindowInfo> Refresh(string? sandboxFilter = null)
+    public IReadOnlyList<WindowInfo> Refresh(string? sandboxFilter = null, string? titleFilter = null)
     {
-        var windows = Win32Interop.EnumerateTopLevelWindows();
+        IReadOnlyList<WindowInfo> windows = Win32Interop.EnumerateTopLevelWindows();
 
         foreach (var window in windows)
         {
             _sandboxDetector.Enrich(window);
+        }
+
+        if (!string.IsNullOrWhiteSpace(titleFilter))
+        {
+            windows = windows
+                .Where(w => w.Title.Contains(titleFilter, StringComparison.OrdinalIgnoreCase))
+                .ToList();
         }
 
         if (!string.IsNullOrWhiteSpace(sandboxFilter))
@@ -50,7 +57,12 @@ public sealed class WindowScannerService : IDisposable
 
     public IReadOnlyList<WindowInfo> ResolveTargets(IEnumerable<WindowMatchRule> rules)
     {
-        var all = Refresh();
+        var all = Win32Interop.EnumerateTopLevelWindows();
+        foreach (var w in all)
+        {
+            _sandboxDetector.Enrich(w);
+        }
+
         return rules
             .Select(rule => all.FirstOrDefault(w => rule.Matches(w)))
             .Where(w => w is not null)

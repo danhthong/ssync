@@ -14,16 +14,17 @@
 
             <TextBlock Text="Replication mode" Margin="0,0,0,4" />
             <ComboBox x:Name="ReplicationModeCombo" SelectionChanged="ReplicationModeCombo_SelectionChanged" Margin="0,0,0,12">
+                <ComboBoxItem Content="SendInput (recommended for games)" />
                 <ComboBoxItem Content="Hybrid (PostMessage → SendInput)" />
                 <ComboBoxItem Content="PostMessage only" />
-                <ComboBoxItem Content="SendInput only" />
             </ComboBox>
 
             <CheckBox Content="Sync mouse movement" IsChecked="{Binding Settings.SyncMouseMove}" Margin="0,0,0,8" />
             <CheckBox Content="Sync keyboard" IsChecked="{Binding Settings.SyncKeyboard}" Margin="0,0,0,8" />
             <CheckBox Content="Broadcast mode (any master/target hit)" IsChecked="{Binding Settings.BroadcastMode}" Margin="0,0,0,8" />
             <CheckBox Content="Show click overlay" IsChecked="{Binding Settings.ShowClickOverlay}" Margin="0,0,0,8" />
-            <CheckBox Content="Auto-reconnect targets" IsChecked="{Binding Settings.AutoReconnect}" Margin="0,0,0,16" />
+            <CheckBox Content="Auto-reconnect targets" IsChecked="{Binding Settings.AutoReconnect}" Margin="0,0,0,8" />
+            <CheckBox Content="Focus target on SendInput (required for games)" IsChecked="{Binding Settings.FocusTargetForSendInput}" Margin="0,0,0,16" />
 
             <TextBlock Text="Click delay (ms)" Margin="0,0,0,4" />
             <ui:NumberBox Value="{Binding Settings.ClickDelayMs, Mode=TwoWay}" Minimum="0" Maximum="500" Margin="0,0,0,12" />

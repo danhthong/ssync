@@ -9,7 +9,7 @@ public enum InputReplicationMode
 
 public sealed class SyncSettings
 {
-    public InputReplicationMode ReplicationMode { get; set; } = InputReplicationMode.Hybrid;
+    public InputReplicationMode ReplicationMode { get; set; } = InputReplicationMode.SendInput;
 
     public bool SyncMouseMove { get; set; }
 
@@ -32,6 +32,14 @@ public sealed class SyncSettings
 
     public string SandboxFilter { get; set; } = string.Empty;
 
+    public string TitleFilter { get; set; } = "Dragon Hunters";
+
+    /// <summary>
+    /// When true, briefly bring each target to the foreground before sending SendInput.
+    /// Required for games that read raw input (DirectInput / Raw Input) instead of WM_* messages.
+    /// </summary>
+    public bool FocusTargetForSendInput { get; set; } = true;
+
     public SyncSettings Clone() => new()
     {
         ReplicationMode = ReplicationMode,
@@ -43,6 +51,8 @@ public sealed class SyncSettings
         ClickDelayMs = ClickDelayMs,
         MoveFpsLimit = MoveFpsLimit,
         SuppressionWindowMs = SuppressionWindowMs,
-        SandboxFilter = SandboxFilter
+        SandboxFilter = SandboxFilter,
+        TitleFilter = TitleFilter,
+        FocusTargetForSendInput = FocusTargetForSendInput
     };
 }
